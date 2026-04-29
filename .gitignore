@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Tool caches
+.turbo/
+.vite/
+.cache/
+
+# Local workspace state
+.claude/
+.claude-oca/
+.superpowers/
+.tmp-dev/
+output/
+
+# Generated test artifacts
+runtime/tests/**/*.d.ts
+runtime/tests/**/*.js
+runtime/tests/**/*.js.map
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

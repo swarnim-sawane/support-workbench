@@ -1,0 +1,22 @@
+{
+  "name": "claude-code-oca-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "runtime",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build -w runtime && npm run build -w backend && npm run build -w frontend",
+    "test": "npm run test -w runtime && npm run test -w backend && npm run test -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}
+
