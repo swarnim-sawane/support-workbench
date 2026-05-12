@@ -72,6 +72,17 @@ export const BUILTIN_TOOL_CATALOG: EngineToolDescriptor[] = [
     stability: 'stable'
   },
   {
+    name: 'LogScan',
+    description:
+      'Scan complete log files and return compact counts, examples, slow requests, status codes, timestamps, and cross-file identifiers.',
+    source: 'builtin',
+    requiresApproval: false,
+    category: 'diagnostics',
+    enabled: true,
+    visibility: 'enabled',
+    stability: 'stable'
+  },
+  {
     name: 'WebFetch',
     description: 'Fetch and summarize the contents of a specific URL.',
     source: 'builtin',

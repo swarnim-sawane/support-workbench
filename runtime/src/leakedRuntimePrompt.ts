@@ -66,6 +66,7 @@ function buildUsingToolsSection(): string {
       'To create files use Write instead of cat with heredoc or echo redirection',
       'To search for files use Glob instead of find or ls',
       'To search the content of files, use Grep instead of grep or rg',
+      'To analyze multiple or large log files, use LogScan before targeted Read or Grep follow-up',
       'Reserve using the Bash exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to the dedicated tool.',
       shellPreference
     ],
@@ -83,6 +84,7 @@ const BUILTIN_TOOL_REFERENCE = new Map<string, string>([
   ['Edit', 'Edit(file_path, old_string, new_string, replace_all?): modify an existing file by exact string replacement'],
   ['Glob', 'Glob(pattern): find files by glob pattern'],
   ['Grep', 'Grep(pattern, glob?, type?, output_mode?, multiline?, ignore_case?, case_sensitive?): search file contents with ripgrep-style semantics'],
+  ['LogScan', 'LogScan(file_paths?, paths?, file_path?, path?, glob?, max_examples_per_file?, slow_ms_threshold?): scan complete log files and return compact diagnostics across full files'],
   ['WebFetch', 'WebFetch(url, prompt): fetch and summarize the contents of a specific URL'],
   ['WebSearch', 'WebSearch(query): search the web for up-to-date information'],
   ['Agent', 'Agent(task, subagent_type?): delegate bounded work to an agent when available'],

@@ -8,6 +8,7 @@ export type BuiltInToolName =
   | 'Edit'
   | 'Glob'
   | 'Grep'
+  | 'LogScan'
   | 'WebFetch'
   | 'WebSearch'
   | 'Agent'

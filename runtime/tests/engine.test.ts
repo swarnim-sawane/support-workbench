@@ -1155,9 +1155,18 @@ describe('createEngine', () => {
     });
 
     expect(turnCount).toBe(3);
-    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(executeTool).toHaveBeenCalledTimes(3);
     expect(executeTool).toHaveBeenNthCalledWith(
       1,
+      expect.objectContaining({
+        toolName: 'LogScan',
+        input: expect.objectContaining({
+          file_paths: [accessPath, catalinaPath]
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         toolName: 'Read',
         input: expect.objectContaining({
@@ -1166,7 +1175,7 @@ describe('createEngine', () => {
       })
     );
     expect(executeTool).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         toolName: 'Read',
         input: expect.objectContaining({
@@ -1220,6 +1229,117 @@ describe('createEngine', () => {
           event.text.includes('I am analyzing all uploaded files now.')
       )
     ).toBe(false);
+  });
+
+  it('pre-scans multiple log attachments before asking the model to analyze them', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-log-prescan-'));
+    const accessPath = join(cwd, 'access.log');
+    const catalinaPath = join(cwd, 'catalina.log');
+    writeFileSync(accessPath, '2026-05-12T10:21:15Z "POST /resources/data HTTP/1.1" 500 912 23081\n');
+    writeFileSync(catalinaPath, '2026-05-12 10:22:03 ERROR oracle.jbo.JboException: query failed\n');
+
+    let capturedMessages: Parameters<EngineModelProvider['sendTurn']>[0] | null = null;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn(messages) {
+        capturedMessages = messages;
+        yield {
+          type: 'assistant_delta',
+          text: 'Scanned evidence shows one 500 and one JboException.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const executeTool = vi.fn(async ({ toolName }: { toolName: string }) => ({
+      summary:
+        toolName === 'LogScan'
+          ? 'LogScan scanned 2 file(s), 2 line(s); found 1 error(s), 1 HTTP 5xx, and 1 slow request(s).'
+          : `${toolName} completed`,
+      metadata:
+        toolName === 'LogScan'
+          ? {
+              scanned_entire_files: true,
+              total_files: 2,
+              scanned_files: 2,
+              totals: {
+                lines: 2,
+                error: 1,
+                http_5xx: 1,
+                slow_requests: 1
+              },
+              files: [
+                { file: accessPath, line_count: 1 },
+                { file: catalinaPath, line_count: 1 }
+              ]
+            }
+          : {}
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd });
+    engine.addAttachment(session.id, {
+      id: 'att-access',
+      originalName: 'access.log',
+      storedName: 'access.log',
+      mediaType: 'application/octet-stream',
+      kind: 'text',
+      localPath: accessPath,
+      size: 100,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: new Date().toISOString()
+    });
+    engine.addAttachment(session.id, {
+      id: 'att-catalina',
+      originalName: 'catalina.log',
+      storedName: 'catalina.log',
+      mediaType: 'application/octet-stream',
+      kind: 'text',
+      localPath: catalinaPath,
+      size: 100,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: new Date().toISOString()
+    });
+
+    await engine.submitPrompt(session.id, 'Analyze all attached files and summarize errors by file.', {
+      attachmentIds: ['att-access', 'att-catalina']
+    });
+
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'LogScan',
+        input: expect.objectContaining({
+          file_paths: [accessPath, catalinaPath],
+          slow_ms_threshold: 5000
+        })
+      })
+    );
+    expect(capturedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          toolName: 'LogScan',
+          content: expect.stringContaining('"scanned_entire_files": true')
+        })
+      ])
+    );
+    expect(engine.getSnapshot(session.id).toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'LogScan',
+          status: 'completed',
+          summary: expect.stringContaining('LogScan scanned 2 file')
+        })
+      ])
+    );
   });
 
   it('normalizes Read path aliases and expands path arrays into bounded concrete reads', async () => {

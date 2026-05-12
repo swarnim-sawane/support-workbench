@@ -135,6 +135,104 @@ describe('executeLocalTool', () => {
     expect(result.metadata?.matches).toHaveLength(500);
   });
 
+  it('scans complete log files and preserves critical evidence near the end', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-logscan-'));
+    writeFileSync(
+      join(cwd, 'access.log'),
+      [
+        ...Array.from({ length: 1200 }, (_, index) => `2026-05-12T10:00:${String(index % 60).padStart(2, '0')}Z "GET /ok/${index} HTTP/1.1" 200 42 12`),
+        '2026-05-12T10:21:15Z "POST /ords/resources/data HTTP/1.1" 500 912 23081 tenantId=TENANT-1 userId=USER-1'
+      ].join('\n')
+    );
+    writeFileSync(
+      join(cwd, 'catalina.log'),
+      [
+        ...Array.from({ length: 900 }, (_, index) => `2026-05-12 10:10:${String(index % 60).padStart(2, '0')} INFO startup ${index}`),
+        '2026-05-12 10:22:02 SEVERE User request may timeout since query criteria attributes are not indexed.',
+        '2026-05-12 10:22:03 ERROR oracle.jbo.JboException: query failed for tenantId=TENANT-1'
+      ].join('\n')
+    );
+
+    const result = await executeLocalTool({
+      toolName: 'LogScan',
+      input: {
+        file_paths: ['access.log', 'catalina.log'],
+        slow_ms_threshold: 5000
+      },
+      cwd,
+      sessionId: 'session-1'
+    });
+
+    expect(result.summary).toContain('LogScan scanned 2 file(s)');
+    expect(result.metadata).toMatchObject({
+      scanned_entire_files: true,
+      total_files: 2,
+      scanned_files: 2,
+      totals: expect.objectContaining({
+        lines: 2103,
+        http_5xx: 1,
+        severe: 1,
+        error: 1,
+        slow_requests: 1
+      })
+    });
+    expect(result.metadata?.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: 'access.log',
+          line_count: 1201,
+          status_counts: expect.objectContaining({
+            '500': 1
+          }),
+          slow_request_count: 1,
+          slow_requests: expect.arrayContaining([
+            expect.objectContaining({
+              line: 1201,
+              duration_ms: 23081
+            })
+          ])
+        }),
+        expect.objectContaining({
+          file: 'catalina.log',
+          line_count: 902,
+          severity_counts: expect.objectContaining({
+            severe: 1,
+            error: 1
+          }),
+          top_signatures: expect.arrayContaining([
+            expect.objectContaining({
+              signature: expect.stringContaining('JboException'),
+              first_line: 902,
+              first_example: expect.stringContaining('query failed')
+            })
+          ])
+        })
+      ])
+    );
+    expect(result.metadata?.critical_examples).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: 'access.log',
+          line: 1201,
+          content: expect.stringContaining('500')
+        }),
+        expect.objectContaining({
+          file: 'catalina.log',
+          line: 902,
+          content: expect.stringContaining('JboException')
+        })
+      ])
+    );
+    expect(result.metadata?.cross_file).toMatchObject({
+      shared_identifiers: expect.arrayContaining([
+        expect.objectContaining({
+          value: 'TENANT-1',
+          files: expect.arrayContaining(['access.log', 'catalina.log'])
+        })
+      ])
+    });
+  });
+
   it('discovers and loads local skills with Skill', async () => {
     const homeDir = mkdtempSync(join(tmpdir(), 'claude-oca-home-'));
     const skillDir = join(homeDir, '.agents', 'skills', 'demo-skill');

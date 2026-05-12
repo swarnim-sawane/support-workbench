@@ -68,7 +68,7 @@ const MAX_RECOVERABLE_TOOL_FAILURES = 3;
 const DEFAULT_BULK_READ_LIMIT = 200;
 const AGENT_SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
 const AGENT_SETTLE_POLL_MS = 100;
-const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'WebFetch', 'WebSearch']);
+const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'LogScan', 'WebFetch', 'WebSearch']);
 const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed', 'cancelled']);
 
 type SessionState = {
@@ -461,6 +461,54 @@ function findSingleDiagnosticAttachment(attachments: EngineAttachment[]): Engine
 
   const [attachment] = activeAttachments;
   return attachment && isDiagnosticLikeTextAttachment(attachment) ? attachment : null;
+}
+
+function isLogLikeTextAttachment(attachment: EngineAttachment): boolean {
+  if (attachment.kind !== 'text' || attachment.promptVisibility !== 'available') {
+    return false;
+  }
+
+  const normalizedName = attachment.originalName.toLowerCase();
+  const extension = extname(normalizedName);
+  return (
+    extension === '.log' ||
+    extension === '.out' ||
+    extension === '.txt' ||
+    normalizedName.includes('access') ||
+    normalizedName.includes('catalina') ||
+    normalizedName.includes('server') ||
+    normalizedName.includes('diagnostic')
+  );
+}
+
+function isLogAnalysisPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return [
+    /\banaly[sz]e\b/,
+    /\banalyse\b/,
+    /\binvestigate\b/,
+    /\bdiagnos(?:e|is)\b/,
+    /\bsummari[sz]e\b/,
+    /\b(root cause|rca)\b/,
+    /\b(errors?|exceptions?|failures?|slow|timeout|5xx|4xx)\b/,
+    /\bwhat happened\b/
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function logAttachmentsForPreScan(attachments: EngineAttachment[]): EngineAttachment[] {
+  return attachments.filter(isLogLikeTextAttachment);
+}
+
+function shouldRunLogPreScan(prompt: string, attachments: EngineAttachment[]): boolean {
+  return logAttachmentsForPreScan(attachments).length > 1 && isLogAnalysisPrompt(prompt);
+}
+
+function buildLogPreScanInput(attachments: EngineAttachment[]): Record<string, unknown> {
+  return {
+    file_paths: logAttachmentsForPreScan(attachments).map((attachment) => attachment.localPath),
+    max_examples_per_file: 12,
+    slow_ms_threshold: 5000
+  };
 }
 
 function isMissingPathValue(value: unknown): boolean {
@@ -867,7 +915,7 @@ function buildModelUserPrompt(
     lines.push(
       '',
       'Runtime instruction:',
-      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For file inspection, call one bounded Read per concrete file_path or use Grep with a targeted glob. If Grep reports truncated results, use the per-file counts to narrow follow-up searches or reads before drawing conclusions. Group findings by file type or purpose, correlate timestamps and shared identifiers across files when available, wait for tool results, then produce one final answer.'
+      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For multiple or large log files, start from the LogScan evidence when present, or call LogScan yourself before targeted Read/Grep follow-up. LogScan scans complete files and returns compact counts, examples, slow requests, status codes, timestamps, and shared identifiers. Use bounded Read calls around important LogScan lines, and use Grep only for narrowed follow-up searches. If Grep reports truncated results, use the per-file counts to narrow follow-up searches or reads before drawing conclusions. Group findings by file type or purpose, correlate timestamps and shared identifiers across files when available, state evidence coverage, wait for tool results, then produce one final answer.'
     );
   }
 
@@ -1508,7 +1556,7 @@ export function createEngine(input: {
 
   function agentHasUsedInspectionTools(agent: AgentState): boolean {
     return agent.toolActivity.some((activity) =>
-      ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Skill', 'TaskOutput'].includes(activity.toolName)
+      ['Read', 'Glob', 'Grep', 'LogScan', 'WebFetch', 'WebSearch', 'Skill', 'TaskOutput'].includes(activity.toolName)
     );
   }
 
@@ -1612,7 +1660,7 @@ export function createEngine(input: {
   }
 
   function buildAgentToolCatalog(): EngineToolDescriptor[] {
-    const allowed = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Skill', 'TodoWrite', 'TaskOutput']);
+    const allowed = new Set(['Read', 'Glob', 'Grep', 'LogScan', 'WebFetch', 'WebSearch', 'Skill', 'TodoWrite', 'TaskOutput']);
     return toolCatalog
       .filter((tool) => tool.source === 'builtin' && allowed.has(tool.name))
       .map((tool) =>
@@ -2162,6 +2210,48 @@ export function createEngine(input: {
     }
 
     return 'completed';
+  }
+
+  async function maybeRunLogPreScan(
+    state: SessionState,
+    prompt: string,
+    turnAttachments: EngineAttachment[]
+  ): Promise<void> {
+    if (!shouldRunLogPreScan(prompt, turnAttachments)) {
+      return;
+    }
+
+    const toolDescriptor = findToolDescriptor(toolCatalog, 'LogScan');
+    if (!toolDescriptor || !isToolVisibleToModel(toolDescriptor)) {
+      return;
+    }
+
+    const inputValue = buildLogPreScanInput(turnAttachments);
+    const requestId = randomUUID();
+    const toolUseId = randomUUID();
+    const outcome = await completeToolExecution(
+      state,
+      requestId,
+      toolUseId,
+      'LogScan',
+      inputValue,
+      {
+        reasoning:
+          'Runtime pre-scan for a multi-log analysis turn so the model starts from complete-file evidence before targeted reads.'
+      }
+    );
+
+    if (outcome !== 'completed') {
+      state.modelHistory.push({
+        role: 'user',
+        content: [
+          'Runtime LogScan pre-scan did not complete.',
+          'Continue with targeted LogScan, Grep, and bounded Read calls using the exact attachment paths from this turn.',
+          'Do not assume the absence of errors until a full-file scan or targeted search verifies it.'
+        ].join('\n')
+      });
+      persistState(state);
+    }
   }
 
   async function processAgentToolQueue(
@@ -2891,6 +2981,8 @@ export function createEngine(input: {
         state.reportSuggestion = explicitReportRouting.reportSuggestion;
       }
       persistState(state);
+
+      await maybeRunLogPreScan(state, prompt, turnAttachments);
 
       await runTurnLoop(state, {
         turnAttachments,
