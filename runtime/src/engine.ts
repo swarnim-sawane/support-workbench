@@ -68,6 +68,9 @@ const MAX_RECOVERABLE_TOOL_FAILURES = 3;
 const DEFAULT_BULK_READ_LIMIT = 200;
 const AGENT_SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
 const AGENT_SETTLE_POLL_MS = 100;
+const LOG_SCAN_EVIDENCE_READ_LIMIT = 40;
+const LOG_SCAN_EVIDENCE_CONTEXT_RADIUS = 10;
+const MAX_LOG_SCAN_EVIDENCE_READS = 6;
 const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'LogScan', 'WebFetch', 'WebSearch']);
 const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed', 'cancelled']);
 
@@ -509,6 +512,109 @@ function buildLogPreScanInput(attachments: EngineAttachment[]): Record<string, u
     max_examples_per_file: 12,
     slow_ms_threshold: 5000
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function logScanEvidencePriority(evidence: Record<string, unknown>): number {
+  const status = typeof evidence.status === 'string' ? evidence.status : '';
+  const kind = typeof evidence.kind === 'string' ? evidence.kind.toLowerCase() : '';
+  const content = typeof evidence.content === 'string' ? evidence.content.toLowerCase() : '';
+  if (/^5\d\d$/.test(status) || kind.includes('http 5')) {
+    return 0;
+  }
+  if (
+    kind.includes('exception') ||
+    kind.includes('fatal') ||
+    kind.includes('severe') ||
+    kind.includes('error') ||
+    kind.includes('ora-') ||
+    content.includes('exception') ||
+    content.includes('error')
+  ) {
+    return 1;
+  }
+  if (typeof evidence.duration_ms === 'number') {
+    return 2;
+  }
+  if (kind.includes('timeout') || content.includes('timeout')) {
+    return 3;
+  }
+  return 4;
+}
+
+function collectLogScanEvidenceReads(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  if (!metadata) {
+    return [];
+  }
+
+  const rawEvidence = [
+    ...(Array.isArray(metadata.critical_examples) ? metadata.critical_examples : []),
+    ...(Array.isArray(metadata.slow_requests) ? metadata.slow_requests : [])
+  ];
+  const candidates = rawEvidence
+    .map(asRecord)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => {
+      const filePath = typeof item.file === 'string' ? item.file.trim() : '';
+      const line = asPositiveInteger(item.line);
+      if (!filePath || !line) {
+        return null;
+      }
+
+      return {
+        filePath,
+        line,
+        priority: logScanEvidencePriority(item),
+        durationMs: typeof item.duration_ms === 'number' ? item.duration_ms : 0
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        filePath: string;
+        line: number;
+        priority: number;
+        durationMs: number;
+      } => Boolean(item)
+    )
+    .sort(
+      (left, right) =>
+        left.priority - right.priority ||
+        right.durationMs - left.durationMs ||
+        left.filePath.localeCompare(right.filePath) ||
+        left.line - right.line
+    );
+
+  const seen = new Set<string>();
+  const selected: typeof candidates = [];
+  for (const candidate of candidates) {
+    const key = `${candidate.filePath}:${candidate.line}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    selected.push(candidate);
+    if (selected.length >= MAX_LOG_SCAN_EVIDENCE_READS) {
+      break;
+    }
+  }
+
+  return selected.map((candidate) => ({
+    file_path: candidate.filePath,
+    offset: Math.max(1, candidate.line - LOG_SCAN_EVIDENCE_CONTEXT_RADIUS),
+    limit: LOG_SCAN_EVIDENCE_READ_LIMIT
+  }));
 }
 
 function isMissingPathValue(value: unknown): boolean {
@@ -2251,6 +2357,39 @@ export function createEngine(input: {
         ].join('\n')
       });
       persistState(state);
+      return;
+    }
+
+    const completedLogScan = state.toolActivity.find(
+      (activity) => activity.requestId === requestId && activity.toolName === 'LogScan'
+    );
+    const evidenceReads = collectLogScanEvidenceReads(completedLogScan?.metadata);
+    for (const readInput of evidenceReads) {
+      const readRequestId = randomUUID();
+      const readToolUseId = randomUUID();
+      const readOutcome = await completeToolExecution(
+        state,
+        readRequestId,
+        readToolUseId,
+        'Read',
+        readInput,
+        {
+          reasoning:
+            'Focused evidence read after LogScan so final log analysis is grounded in concrete surrounding lines.'
+        }
+      );
+
+      if (readOutcome === 'blocked' || readOutcome === 'recoverable_failed') {
+        state.modelHistory.push({
+          role: 'user',
+          content: [
+            'A focused evidence read after LogScan failed.',
+            'Continue with the available LogScan evidence and use targeted Read or Grep follow-up before finalizing if more detail is needed.'
+          ].join('\n')
+        });
+        persistState(state);
+        return;
+      }
     }
   }
 

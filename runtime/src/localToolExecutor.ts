@@ -346,6 +346,23 @@ function isLogScanCriticalLine(
   );
 }
 
+function pushTopSlowRequest(
+  target: LogScanExample[],
+  example: LogScanExample,
+  limit: number
+): void {
+  target.push(example);
+  target.sort(
+    (left, right) =>
+      (right.duration_ms ?? 0) - (left.duration_ms ?? 0) ||
+      left.file.localeCompare(right.file) ||
+      left.line - right.line
+  );
+  if (target.length > limit) {
+    target.length = limit;
+  }
+}
+
 function listInputPaths(input: Record<string, unknown>): string[] {
   const paths: string[] = [];
   for (const key of ['file_paths', 'paths']) {
@@ -494,8 +511,8 @@ async function scanOneLogFile(
       }
     }
 
-    if (isSlow && slowRequests.length < options.maxExamplesPerFile) {
-      slowRequests.push({
+    if (isSlow) {
+      pushTopSlowRequest(slowRequests, {
         file: displayPath,
         line: lineCount,
         kind: 'slow_request',
@@ -503,7 +520,7 @@ async function scanOneLogFile(
         timestamp: timestamp ?? undefined,
         duration_ms: durationMs ?? undefined,
         status
-      });
+      }, options.maxExamplesPerFile);
     }
 
     if (
@@ -608,7 +625,15 @@ async function executeLogScan(
   );
 
   const criticalExamples = summaries.flatMap((file) => file.critical_examples).slice(0, 200);
-  const slowRequests = summaries.flatMap((file) => file.slow_requests).slice(0, 100);
+  const slowRequests = summaries
+    .flatMap((file) => file.slow_requests)
+    .sort(
+      (left, right) =>
+        (right.duration_ms ?? 0) - (left.duration_ms ?? 0) ||
+        left.file.localeCompare(right.file) ||
+        left.line - right.line
+    )
+    .slice(0, 100);
   const sharedIdentifiers = [...identifierFiles.entries()]
     .filter(([, entry]) => entry.files.size > 1)
     .sort((left, right) => right[1].files.size - left[1].files.size || right[1].count - left[1].count)

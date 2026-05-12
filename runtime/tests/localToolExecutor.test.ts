@@ -233,6 +233,42 @@ describe('executeLocalTool', () => {
     });
   });
 
+  it('keeps the slowest log requests as focused evidence instead of only the first slow lines', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-logscan-slowest-'));
+    writeFileSync(
+      join(cwd, 'access.log'),
+      [
+        '2026-05-12T10:00:01Z "GET /slow-a HTTP/1.1" 200 10 6000',
+        '2026-05-12T10:00:02Z "GET /slow-b HTTP/1.1" 200 10 7000',
+        '2026-05-12T10:00:03Z "GET /very-slow HTTP/1.1" 200 10 45000'
+      ].join('\n')
+    );
+
+    const result = await executeLocalTool({
+      toolName: 'LogScan',
+      input: {
+        file_path: 'access.log',
+        slow_ms_threshold: 5000,
+        max_examples_per_file: 2
+      },
+      cwd,
+      sessionId: 'session-1'
+    });
+
+    expect(result.metadata?.slow_requests).toEqual([
+      expect.objectContaining({
+        line: 3,
+        duration_ms: 45000,
+        content: expect.stringContaining('/very-slow')
+      }),
+      expect.objectContaining({
+        line: 2,
+        duration_ms: 7000,
+        content: expect.stringContaining('/slow-b')
+      })
+    ]);
+  });
+
   it('discovers and loads local skills with Skill', async () => {
     const homeDir = mkdtempSync(join(tmpdir(), 'claude-oca-home-'));
     const skillDir = join(homeDir, '.agents', 'skills', 'demo-skill');

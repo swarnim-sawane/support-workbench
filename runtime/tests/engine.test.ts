@@ -1260,7 +1260,7 @@ describe('createEngine', () => {
       summary:
         toolName === 'LogScan'
           ? 'LogScan scanned 2 file(s), 2 line(s); found 1 error(s), 1 HTTP 5xx, and 1 slow request(s).'
-          : `${toolName} completed`,
+          : `Read focused evidence from ${toolName}`,
       metadata:
         toolName === 'LogScan'
           ? {
@@ -1276,9 +1276,37 @@ describe('createEngine', () => {
               files: [
                 { file: accessPath, line_count: 1 },
                 { file: catalinaPath, line_count: 1 }
+              ],
+              critical_examples: [
+                {
+                  file: accessPath,
+                  line: 1,
+                  kind: 'HTTP 500',
+                  content: 'POST /resources/data 500 23081',
+                  status: '500',
+                  duration_ms: 23081
+                },
+                {
+                  file: catalinaPath,
+                  line: 1,
+                  kind: 'oracle.jbo.JboException',
+                  content: 'ERROR oracle.jbo.JboException: query failed'
+                }
+              ],
+              slow_requests: [
+                {
+                  file: accessPath,
+                  line: 1,
+                  kind: 'slow_request',
+                  content: 'POST /resources/data 500 23081',
+                  status: '500',
+                  duration_ms: 23081
+                }
               ]
             }
-          : {}
+          : {
+              content: 'focused evidence window'
+            }
     }));
 
     const engine = createEngine({ provider, executeTool });
@@ -1312,13 +1340,36 @@ describe('createEngine', () => {
       attachmentIds: ['att-access', 'att-catalina']
     });
 
-    expect(executeTool).toHaveBeenCalledTimes(1);
-    expect(executeTool).toHaveBeenCalledWith(
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(executeTool).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         toolName: 'LogScan',
         input: expect.objectContaining({
           file_paths: [accessPath, catalinaPath],
           slow_ms_threshold: 5000
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        toolName: 'Read',
+        input: expect.objectContaining({
+          file_path: accessPath,
+          offset: 1,
+          limit: 40
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        toolName: 'Read',
+        input: expect.objectContaining({
+          file_path: catalinaPath,
+          offset: 1,
+          limit: 40
         })
       })
     );
@@ -1328,6 +1379,11 @@ describe('createEngine', () => {
           role: 'tool',
           toolName: 'LogScan',
           content: expect.stringContaining('"scanned_entire_files": true')
+        }),
+        expect.objectContaining({
+          role: 'tool',
+          toolName: 'Read',
+          content: expect.stringContaining('focused evidence window')
         })
       ])
     );
@@ -1337,6 +1393,11 @@ describe('createEngine', () => {
           toolName: 'LogScan',
           status: 'completed',
           summary: expect.stringContaining('LogScan scanned 2 file')
+        }),
+        expect.objectContaining({
+          toolName: 'Read',
+          status: 'completed',
+          reasoning: expect.stringContaining('Focused evidence read after LogScan')
         })
       ])
     );
