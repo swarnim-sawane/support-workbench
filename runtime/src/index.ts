@@ -12,6 +12,8 @@ export type {
   EngineModelMessage,
   EngineModelEvent,
   EngineModelProvider,
+  EngineProgressActivity,
+  EngineProgressPhase,
   EngineReportSuggestion,
   EngineReportArtifact,
   EngineSession,

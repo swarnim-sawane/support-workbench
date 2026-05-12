@@ -864,6 +864,26 @@ p {
   color: var(--text-dim);
 }
 
+.working-summary-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.working-summary-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-summary-copy span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
 .working-step-list {
   display: flex;
   flex-direction: column;

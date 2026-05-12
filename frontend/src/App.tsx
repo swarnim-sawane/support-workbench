@@ -264,6 +264,7 @@ export function App({
     return () => window.cancelAnimationFrame(animationFrame);
   }, [
     deferredMessages.length,
+    (snapshot.progressActivity ?? []).length,
     snapshot.toolActivity.length,
     snapshot.reports.artifacts.length,
     snapshot.pendingApprovals.length,

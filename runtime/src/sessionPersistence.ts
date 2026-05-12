@@ -8,6 +8,7 @@ import type {
   EngineMemoryEntry,
   EngineMessage,
   EngineModelMessage,
+  EngineProgressActivity,
   EngineReportSuggestion,
   EngineReportArtifact,
   EngineSession,
@@ -31,6 +32,7 @@ export type PersistedSessionRecord = {
   tasks: EngineTask[];
   memoryEntries: EngineMemoryEntry[];
   historySummaries: EngineHistorySummary[];
+  progressActivity?: EngineProgressActivity[];
   toolActivity?: EngineToolActivity[];
   agents?: EngineAgent[];
   skippedTools?: EngineSkippedToolRecord[];

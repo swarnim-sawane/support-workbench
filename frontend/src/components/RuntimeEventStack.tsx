@@ -19,6 +19,8 @@ import type {
 } from '../types';
 import {
   buildAgentSummary,
+  buildFriendlyToolActivityTitle,
+  buildFriendlyToolGroupTitle,
   buildReportSuggestionTitle,
   buildToolActivitySummary,
   formatBytes,
@@ -54,8 +56,8 @@ export function RuntimeEventStack({
   return (
     <div className="runtime-stack" aria-label="Runtime events">
       {snapshot.toolActivity.length ? (
-        <TranscriptEventGroup
-          title={buildToolGroupTitle(snapshot.toolActivity)}
+          <TranscriptEventGroup
+          title={buildFriendlyToolGroupTitle(snapshot.toolActivity)}
           icon={buildToolGroupIcon(snapshot.toolActivity)}
           tone={buildToolGroupTone(snapshot.toolActivity)}
           open
@@ -296,23 +298,6 @@ function ReportRuntimeButton({
   );
 }
 
-function buildToolGroupTitle(activities: WorkbenchToolActivity[]): string {
-  const running = activities.filter((activity) => activity.status === 'running');
-  if (running.length) {
-    const first = running[0];
-    return running.length === 1
-      ? `Running ${first.toolName}`
-      : `Running ${first.toolName} +${running.length - 1}`;
-  }
-
-  const pending = activities.filter((activity) => activity.status === 'pending');
-  if (pending.length) {
-    return `Queued ${pending.length} ${pluralize(pending.length, 'tool')}`;
-  }
-
-  return `Ran ${activities.length} ${pluralize(activities.length, 'tool')}`;
-}
-
 function buildToolGroupIcon(activities: WorkbenchToolActivity[]): ReactNode {
   if (activities.some((activity) => activity.status === 'running')) {
     return <LoaderCircle className="spin" size={15} />;
@@ -334,22 +319,7 @@ function buildToolGroupTone(activities: WorkbenchToolActivity[]): string {
 }
 
 function buildToolActivityTitle(activity: WorkbenchToolActivity): string {
-  if (activity.status === 'completed') {
-    return `Ran ${activity.toolName}`;
-  }
-  if (activity.status === 'running') {
-    return `Running ${activity.toolName}`;
-  }
-  if (activity.status === 'pending') {
-    return `Queued ${activity.toolName}`;
-  }
-  if (activity.status === 'denied') {
-    return `${activity.toolName} denied`;
-  }
-  if (activity.recoverable) {
-    return `Recovering from ${activity.toolName} error`;
-  }
-  return `${activity.toolName} failed`;
+  return buildFriendlyToolActivityTitle(activity);
 }
 
 function buildAgentGroupTitle(agents: WorkbenchBackgroundAgent[]): string {

@@ -534,6 +534,161 @@ describe('App', () => {
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
 
+  it('shows the active analysis phase and recent progress steps while working', () => {
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running',
+        messages: [
+          {
+            id: 'user-progress',
+            role: 'user',
+            content: 'Analyze these uploaded logs'
+          }
+        ],
+        toolActivity: [],
+        progressActivity: [
+          {
+            id: 'progress-thinking',
+            phase: 'model.thinking',
+            label: 'Analyzing uploaded evidence',
+            detail: '3 files selected',
+            status: 'running',
+            startedAt: '2026-04-24T00:00:02.000Z'
+          },
+          {
+            id: 'progress-classifying',
+            phase: 'attachments.classifying',
+            label: 'Classifying uploaded files',
+            detail: '2 logs, 1 text file',
+            status: 'completed',
+            startedAt: '2026-04-24T00:00:01.000Z',
+            completedAt: '2026-04-24T00:00:02.000Z'
+          }
+        ]
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(screen.getByText('Analyzing uploaded evidence - 3 files selected')).toBeInTheDocument();
+    expect(screen.getByText('Classifying uploaded files - 2 logs, 1 text file')).toBeInTheDocument();
+    expect(screen.queryByText('Preparing answer')).not.toBeInTheDocument();
+  });
+
+  it('uses human readable Codex-style labels for active file inspection', () => {
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running',
+        messages: [
+          {
+            id: 'user-progress-tools',
+            role: 'user',
+            content: 'Analyze all uploaded logs'
+          }
+        ],
+        progressActivity: [
+          {
+            id: 'progress-thinking',
+            phase: 'model.thinking',
+            label: 'Analyzing uploaded evidence',
+            detail: '12 files selected',
+            status: 'running',
+            startedAt: '2026-04-24T00:00:02.000Z'
+          },
+          {
+            id: 'progress-classifying',
+            phase: 'attachments.classifying',
+            label: 'Classifying uploaded files',
+            detail: '12 log files',
+            status: 'completed',
+            startedAt: '2026-04-24T00:00:01.000Z',
+            completedAt: '2026-04-24T00:00:02.000Z'
+          }
+        ],
+        toolActivity: [
+          {
+            requestId: 'req-read-running',
+            toolUseId: 'tool-read-running',
+            toolName: 'Read',
+            source: 'builtin',
+            status: 'running',
+            input: {
+              file_path:
+                'C:/repo/.claude-oca/uploads/session-1/AVBCS-41519_vm2_catalina_new.log'
+            },
+            startedAt: '2026-04-24T00:00:04.000Z'
+          },
+          {
+            requestId: 'req-read-completed-1',
+            toolUseId: 'tool-read-completed-1',
+            toolName: 'Read',
+            source: 'builtin',
+            status: 'completed',
+            input: {
+              file_path: 'C:/repo/.claude-oca/uploads/session-1/AVBCS-41519_vm1_access.log'
+            },
+            summary: 'Read AVBCS-41519_vm1_access.log',
+            startedAt: '2026-04-24T00:00:02.000Z',
+            completedAt: '2026-04-24T00:00:03.000Z'
+          },
+          {
+            requestId: 'req-read-completed-2',
+            toolUseId: 'tool-read-completed-2',
+            toolName: 'Read',
+            source: 'builtin',
+            status: 'completed',
+            input: {
+              file_path: 'C:/repo/.claude-oca/uploads/session-1/AVBCS-41519_vm2_access.log'
+            },
+            summary: 'Read AVBCS-41519_vm2_access.log',
+            startedAt: '2026-04-24T00:00:03.000Z',
+            completedAt: '2026-04-24T00:00:04.000Z'
+          },
+          {
+            requestId: 'req-grep-completed',
+            toolUseId: 'tool-grep-completed',
+            toolName: 'Grep',
+            source: 'builtin',
+            category: 'search',
+            status: 'completed',
+            input: {
+              pattern: 'ERROR|Exception',
+              glob: '**/*.log'
+            },
+            summary: 'Found matching errors',
+            startedAt: '2026-04-24T00:00:03.000Z',
+            completedAt: '2026-04-24T00:00:04.000Z'
+          }
+        ]
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(
+      screen.getByRole('status', { name: /analyzing uploaded evidence/i })
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/Reading AVBCS-41519_vm2_catalina_new\.log/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Read 2 files/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Searched uploaded logs/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Running Read$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Running Grep$/i)).not.toBeInTheDocument();
+  });
+
   it('shows unavailable analyzer fallback without offering /report', () => {
     const onApprove = vi.fn();
     const onPromptSubmit = vi.fn();
@@ -814,7 +969,7 @@ describe('App', () => {
     fireEvent.keyDown(window, { key: '3' });
     expect(onApprove).toHaveBeenCalledWith('req-approval', 'deny');
 
-    await user.click(screen.getByText(/ran analyze_adf_logs/i));
+    await user.click(screen.getByText(/analyzed logs/i));
     expect(screen.getByText('Input')).toBeInTheDocument();
     expect(screen.getByText(/log_folder/i)).toBeInTheDocument();
   });
@@ -1216,6 +1371,7 @@ function buildInteractiveSnapshot(): WorkbenchSessionSnapshot {
       }
     ],
     pendingApprovals: [],
+    progressActivity: [],
     toolActivity: [
       {
         requestId: 'req-jd-interactive',

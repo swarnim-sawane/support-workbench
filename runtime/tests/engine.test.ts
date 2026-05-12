@@ -21,6 +21,33 @@ function collectEvents() {
   };
 }
 
+function waitForEvent(
+  events: EngineEvent[],
+  predicate: (event: EngineEvent) => boolean,
+  timeoutMs = 150
+): Promise<EngineEvent> {
+  const existing = events.find(predicate);
+  if (existing) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      const next = events.find(predicate);
+      if (next) {
+        clearInterval(id);
+        resolve(next);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(id);
+        reject(new Error('Timed out waiting for event'));
+      }
+    }, 5);
+  });
+}
+
 describe('createEngine', () => {
   it('assembles a leaked-style system prompt with dedicated tool guidance', () => {
     const prompt = buildLeakedRuntimeSystemPrompt();
@@ -519,6 +546,94 @@ describe('createEngine', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'att-text', originalName: 'trace.log' }),
         expect.objectContaining({ id: 'att-image', originalName: 'error.png' })
+      ])
+    );
+  });
+
+  it('emits structured progress phases while multi-file analysis waits on the provider', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-progress-'));
+    const sessionId = 'session-progress';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const paths = ['access.log', 'catalina.out', 'vm2-diagnostic.txt'].map((fileName) => {
+      const path = join(uploadDir, fileName);
+      writeFileSync(path, `${fileName} content`);
+      return path;
+    });
+
+    let releaseProvider!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        await providerStarted;
+        yield {
+          type: 'assistant_delta',
+          text: 'I correlated the uploaded logs.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const engine = createEngine({ provider });
+    const session = engine.createSession({ cwd, sessionId });
+    const log = collectEvents();
+    const unsubscribe = engine.subscribe(session.id, log.push);
+
+    paths.forEach((localPath, index) => {
+      engine.addAttachment(session.id, {
+        id: `att-${index}`,
+        originalName: localPath.split(/[\\/]/).at(-1)!,
+        storedName: localPath.split(/[\\/]/).at(-1)!,
+        mediaType: 'text/plain',
+        kind: 'text',
+        localPath,
+        size: 20,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: '2026-04-24T00:00:00.000Z'
+      });
+    });
+
+    const submitPromise = engine.submitPrompt(session.id, 'analyze the uploaded files', {
+      attachmentIds: ['att-0', 'att-1', 'att-2']
+    });
+
+    await waitForEvent(
+      log.events,
+      (event) =>
+        (event as { type: string; phase?: string }).type === 'progress.started' &&
+        (event as { phase?: string }).phase === 'model.thinking'
+    );
+
+    expect(engine.getSnapshot(session.id).progressActivity[0]).toMatchObject({
+      phase: 'model.thinking',
+      label: 'Analyzing uploaded evidence',
+      status: 'running'
+    });
+
+    releaseProvider();
+    await submitPromise;
+    unsubscribe();
+
+    expect(
+      log.events
+        .filter((event) => (event as { type: string }).type === 'progress.completed')
+        .map((event) => (event as { label?: string }).label)
+    ).toEqual(
+      expect.arrayContaining([
+        'Discovering uploaded files',
+        'Classifying uploaded files',
+        'Analyzing uploaded evidence',
+        'Preparing final answer'
       ])
     );
   });
