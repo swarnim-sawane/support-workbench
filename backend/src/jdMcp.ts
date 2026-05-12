@@ -273,6 +273,18 @@ function toSummary(
   return rawText.trim().slice(0, 240) || `${toolName} completed through jd-mcp`;
 }
 
+function payloadFailureMessage(parsed: Record<string, unknown> | null): string | undefined {
+  const exitCode = parsed?.exitCode;
+  if (typeof exitCode !== 'number' || exitCode === 0) {
+    return undefined;
+  }
+
+  const stderr = typeof parsed?.stderr === 'string' ? parsed.stderr.trim() : '';
+  const note = typeof parsed?.note === 'string' ? parsed.note.trim() : '';
+  const stdout = typeof parsed?.stdout === 'string' ? parsed.stdout.trim() : '';
+  return stderr || note || stdout || `jd-mcp tool exited with code ${exitCode}`;
+}
+
 export class JdMcpBridge {
   private lastHealth: { at: number; value: JdMcpHealth } | null = null;
 
@@ -390,6 +402,11 @@ export class JdMcpBridge {
     }
 
     const parsed = parsePayload(response.text ?? '');
+    const failureMessage = payloadFailureMessage(parsed);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+
     const artifacts = extractReportArtifacts(parsed, args.sessionId, args.toolName);
     const summary = toSummary(args.toolName, parsed, response.text ?? '', artifacts);
 

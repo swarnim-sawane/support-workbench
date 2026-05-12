@@ -372,6 +372,7 @@ export function reduceEngineEvent(
             snapshot.toolActivity.find((activity) => activity.requestId === event.requestId)?.startedAt,
           completedAt: new Date().toISOString()
         }),
+        reportSuggestion: event.producesReports ? null : snapshot.reportSuggestion,
         messages: event.agentId
           ? snapshot.messages
           : [

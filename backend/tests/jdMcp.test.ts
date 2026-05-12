@@ -166,6 +166,41 @@ describe('JdMcpBridge', () => {
     });
   });
 
+  it('treats non-zero jd-mcp payload exit codes as failed tool executions', async () => {
+    configureFakeJdMcpRoot();
+
+    const bridge = new JdMcpBridge();
+    (bridge as unknown as {
+      invoke: () => Promise<{
+        ok: boolean;
+        status: 'connected';
+        text: string;
+      }>;
+    }).invoke = async () => ({
+      ok: true,
+      status: 'connected',
+      text: JSON.stringify({
+        exitCode: 1,
+        reports: [],
+        selectedInputPattern: '*.log*',
+        matchedInputCount: 1,
+        stderr:
+          'Exception in thread "main" java.lang.NullPointerException: Cannot invoke "oracle.jtech.la.LogMessage.setMsg(String)" because "logM" is null'
+      })
+    });
+
+    await expect(
+      bridge.executeTool({
+        toolName: 'analyze_adf_logs',
+        input: {
+          log_folder: 'C:/logs'
+        },
+        cwd: process.cwd(),
+        sessionId: 'session-with-bad-log'
+      })
+    ).rejects.toThrow('Cannot invoke "oracle.jtech.la.LogMessage.setMsg(String)"');
+  });
+
   it.skipIf(!existsSync(siblingJdMcpRoot()))(
     'auto-detects the sibling jd-mcp checkout when JD_MCP_ROOT is unset',
     () => {

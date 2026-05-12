@@ -296,6 +296,38 @@ describe('reduceEngineEvent', () => {
     ]);
   });
 
+  it('clears stale report suggestions when a report-producing tool fails', () => {
+    const snapshotWithSuggestion: WorkbenchSessionSnapshot = {
+      ...EMPTY_SNAPSHOT,
+      reportSuggestion: {
+        available: true,
+        canRun: true,
+        suggestedToolName: 'analyze_adf_logs',
+        source: 'jd-mcp',
+        explanation: 'This turn used direct file analysis.',
+        attachmentIds: ['att-log'],
+        input: {
+          log_folder: 'C:/logs'
+        },
+        reasonCode: 'builtin_better_for_single_file'
+      }
+    };
+
+    const failed = reduceEngineEvent(snapshotWithSuggestion, {
+      type: 'tool.execution.failed',
+      sessionId: 'session-1',
+      requestId: 'req-report-failed',
+      toolUseId: 'toolu_report_failed',
+      toolName: 'analyze_adf_logs',
+      source: 'jd-mcp',
+      category: 'reports',
+      producesReports: true,
+      error: 'Analyzer crashed'
+    });
+
+    expect(failed.reportSuggestion).toBeNull();
+  });
+
   it('does not mark the session blocked for recoverable tool failures', () => {
     const started = reduceEngineEvent(
       {

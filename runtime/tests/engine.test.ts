@@ -1445,6 +1445,92 @@ describe('createEngine', () => {
     expect(engine.getSnapshot(session.id).status).toBe('completed');
   });
 
+  it('surfaces failed /report executions and clears the stale report suggestion', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-command-failure-'));
+    const sessionId = 'report-command-failure-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const logPath = join(uploadDir, 'DefaultServer-diagnostic.log');
+    writeFileSync(logPath, 'ADF diagnostic log');
+
+    const provider: EngineModelProvider = {
+      healthCheck: vi.fn(async () => ({ ok: true, provider: 'fake', model: 'fake-model' })),
+      sendTurn: vi.fn(async function* () {
+        yield {
+          type: 'assistant_delta',
+          text: 'Direct analysis result'
+        } satisfies EngineModelEvent;
+      }),
+      cancelTurn: vi.fn(async () => {})
+    };
+    const executeTool = vi.fn(async () => {
+      throw new Error(
+        'Exception in thread "main" java.lang.NullPointerException: Cannot invoke "oracle.jtech.la.LogMessage.setMsg(String)" because "logM" is null'
+      );
+    });
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_adf_logs',
+          description: 'Analyze ADF logs through jd-mcp.',
+          source: 'jd-mcp',
+          requiresApproval: true,
+          producesReports: true,
+          category: 'reports',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    engine.addAttachment(session.id, {
+      id: 'att-log',
+      originalName: 'DefaultServer-diagnostic.log',
+      storedName: 'DefaultServer-diagnostic.log',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: logPath,
+      size: 18,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-04-24T00:00:00.000Z'
+    });
+
+    await engine.submitPrompt(session.id, 'analyze this log', {
+      attachmentIds: ['att-log']
+    });
+    expect(engine.getSnapshot(session.id).reportSuggestion).toMatchObject({
+      canRun: true,
+      suggestedToolName: 'analyze_adf_logs'
+    });
+
+    await engine.submitPrompt(session.id, '/report', {
+      attachmentIds: ['att-log']
+    });
+    const approval = engine.getPendingApprovals(session.id)[0];
+    await engine.resolveApproval(session.id, approval!.requestId, {
+      decision: 'allow'
+    });
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(snapshot.status).toBe('blocked');
+    expect(snapshot.reportSuggestion).toBeNull();
+    expect(snapshot.toolActivity[0]).toMatchObject({
+      toolName: 'analyze_adf_logs',
+      status: 'failed'
+    });
+    expect(snapshot.messages.at(-1)).toMatchObject({
+      role: 'system',
+      kind: 'command-error',
+      content: expect.stringContaining('analyze_adf_logs failed: Exception in thread "main"')
+    });
+  });
+
   it('keeps /report strict when analyze_adf_logs is unavailable', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-strict-unavailable-'));
     const sessionId = 'report-strict-unavailable-session';

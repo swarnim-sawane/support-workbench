@@ -1684,6 +1684,9 @@ export function createEngine(input: {
         : {
             recoverable: false
           };
+      if (toolDescriptor?.producesReports) {
+        state.reportSuggestion = null;
+      }
       const failedActivity = options.agentId
         ? createAgentToolActivity({
             requestId,
