@@ -175,8 +175,6 @@ describe('createEngine', () => {
       'session.created',
       'turn.started',
       'message.user',
-      'message.assistant.delta',
-      'message.assistant.done',
       'permission.requested'
     ]);
     expect(log.events.at(-1)).toMatchObject({
@@ -1049,6 +1047,263 @@ describe('createEngine', () => {
           }
         })
       ])
+    );
+  });
+
+  it('rejects undefined bulk Read paths for multiple attachments and recovers with concrete reads', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-bulk-read-'));
+    const sessionId = 'bulk-read-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const accessPath = join(uploadDir, 'access.log');
+    const catalinaPath = join(uploadDir, 'catalina.out');
+    writeFileSync(accessPath, 'GET /ords 500\n');
+    writeFileSync(catalinaPath, 'SEVERE startup failed\n');
+
+    let turnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          yield {
+            type: 'assistant_delta',
+            text: 'I am analyzing all uploaded files now.'
+          } satisfies EngineModelEvent;
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: 'undefined'
+            },
+            reasoning: 'Read all attached logs.'
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        if (turnCount === 2) {
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: accessPath,
+              limit: 20
+            }
+          } satisfies EngineModelEvent;
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: catalinaPath,
+              limit: 20
+            }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Found HTTP 500s in access.log and startup failures in catalina.out.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const executeTool = vi.fn(async ({ input }: { input: Record<string, unknown> }) => ({
+      summary: `Read ${String(input.file_path ?? '')}`,
+      metadata: {
+        echoed: input
+      }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd, sessionId });
+    engine.addAttachment(session.id, {
+      id: 'att-access',
+      originalName: 'access.log',
+      storedName: 'access.log',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: accessPath,
+      size: 13,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-04-24T00:00:00.000Z'
+    });
+    engine.addAttachment(session.id, {
+      id: 'att-catalina',
+      originalName: 'catalina.out',
+      storedName: 'catalina.out',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: catalinaPath,
+      size: 22,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-04-24T00:00:00.000Z'
+    });
+    const log = collectEvents();
+    engine.subscribe(session.id, log.push);
+
+    await engine.submitPrompt(session.id, 'Analyze all attached files and summarize errors by file.', {
+      attachmentIds: ['att-access', 'att-catalina']
+    });
+
+    expect(turnCount).toBe(3);
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(executeTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        toolName: 'Read',
+        input: expect.objectContaining({
+          file_path: accessPath
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        toolName: 'Read',
+        input: expect.objectContaining({
+          file_path: catalinaPath
+        })
+      })
+    );
+    expect(executeTool).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          file_path: 'undefined'
+        })
+      })
+    );
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'Read',
+          status: 'failed',
+          recoverable: true,
+          error: expect.stringContaining('multiple attachments')
+        }),
+        expect.objectContaining({
+          toolName: 'Read',
+          status: 'completed',
+          input: expect.objectContaining({ file_path: accessPath })
+        }),
+        expect.objectContaining({
+          toolName: 'Read',
+          status: 'completed',
+          input: expect.objectContaining({ file_path: catalinaPath })
+        })
+      ])
+    );
+    const failedRead = snapshot.toolActivity.find(
+      (activity) => activity.toolName === 'Read' && activity.status === 'failed'
+    );
+    expect(failedRead?.error).toContain(accessPath);
+    expect(failedRead?.error).toContain(catalinaPath);
+    expect(failedRead?.error).toContain('one concrete file_path');
+    expect(snapshot.messages.map((message) => message.content)).not.toContain(
+      'I am analyzing all uploaded files now.'
+    );
+    expect(
+      log.events.some(
+        (event) =>
+          event.type === 'message.assistant.delta' &&
+          event.text.includes('I am analyzing all uploaded files now.')
+      )
+    ).toBe(false);
+  });
+
+  it('normalizes Read path aliases and expands path arrays into bounded concrete reads', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-read-inputs-'));
+    const firstPath = join(cwd, 'first.log');
+    const secondPath = join(cwd, 'second.log');
+    const thirdPath = join(cwd, 'third.log');
+    writeFileSync(firstPath, 'first');
+    writeFileSync(secondPath, 'second');
+    writeFileSync(thirdPath, 'third');
+
+    let turnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              path: firstPath
+            }
+          } satisfies EngineModelEvent;
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              paths: [secondPath, thirdPath]
+            }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Read all requested files.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const executeTool = vi.fn(async ({ input }: { input: Record<string, unknown> }) => ({
+      summary: `Read ${String(input.file_path ?? '')}`,
+      metadata: {
+        echoed: input
+      }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd });
+
+    await engine.submitPrompt(session.id, 'Read these logs');
+
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(executeTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          file_path: firstPath
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          file_path: secondPath,
+          limit: 200
+        })
+      })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          file_path: thirdPath,
+          limit: 200
+        })
+      })
     );
   });
 

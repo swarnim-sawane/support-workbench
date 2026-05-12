@@ -52,6 +52,10 @@ type PendingToolCall = {
   reasoning?: string;
 };
 
+type PreparedPendingToolCall = PendingToolCall & {
+  validationError?: string;
+};
+
 type ToolExecutionOutcome = 'completed' | 'blocked' | 'recoverable_failed';
 type MainToolQueueResult = 'completed' | 'paused' | 'blocked' | 'recoverable_failed';
 
@@ -61,6 +65,7 @@ type AgentState = EngineAgent & {
 };
 
 const MAX_RECOVERABLE_TOOL_FAILURES = 3;
+const DEFAULT_BULK_READ_LIMIT = 200;
 const AGENT_SETTLE_TIMEOUT_MS = 10 * 60 * 1000;
 const AGENT_SETTLE_POLL_MS = 100;
 const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'WebFetch', 'WebSearch']);
@@ -467,6 +472,20 @@ function isMissingPathValue(value: unknown): boolean {
   return !normalized || normalized === 'undefined' || normalized === 'null';
 }
 
+function isAbstractAttachmentPathValue(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  return [
+    'all',
+    'all files',
+    'all attached files',
+    'all attachments',
+    'attached files',
+    'attachments',
+    'uploaded files',
+    'all uploaded files'
+  ].includes(normalized);
+}
+
 function firstUsablePathValue(inputValue: Record<string, unknown>, keys: string[]): string | null {
   for (const key of keys) {
     const value = inputValue[key];
@@ -476,6 +495,124 @@ function firstUsablePathValue(inputValue: Record<string, unknown>, keys: string[
   }
 
   return null;
+}
+
+function firstUsableReadPathValue(inputValue: Record<string, unknown>): string | null {
+  const value = firstUsablePathValue(inputValue, ['file_path', 'path', 'input_path', 'input']);
+  if (!value || isAbstractAttachmentPathValue(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function firstUsableReadPathArray(inputValue: Record<string, unknown>): string[] {
+  for (const key of ['file_paths', 'paths']) {
+    const value = inputValue[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+
+    const paths = value
+      .filter((item): item is string => !isMissingPathValue(item))
+      .map((item) => item.trim())
+      .filter((item) => !isAbstractAttachmentPathValue(item));
+    if (paths.length) {
+      return paths;
+    }
+  }
+
+  return [];
+}
+
+function normalizeReadInput(
+  inputValue: Record<string, unknown>,
+  filePath: string,
+  options: { boundedDefaultLimit?: boolean } = {}
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    ...inputValue,
+    file_path: filePath
+  };
+  delete next.path;
+  delete next.input_path;
+  delete next.input;
+  delete next.file_paths;
+  delete next.paths;
+
+  if (options.boundedDefaultLimit && typeof next.limit === 'undefined') {
+    next.limit = DEFAULT_BULK_READ_LIMIT;
+  }
+
+  return next;
+}
+
+function buildReadPathValidationError(
+  inputValue: Record<string, unknown>,
+  turnAttachments: EngineAttachment[]
+): string {
+  return [
+    'Read cannot run against multiple attachments without one concrete file_path.',
+    `Failed input: ${JSON.stringify(inputValue)}.`,
+    'Available attachment paths:',
+    ...turnAttachments.map((attachment) => `- ${attachment.originalName}: ${attachment.localPath}`),
+    'Retry with one concrete file_path per Read call, or use Grep with a targeted glob when a bounded search is better.'
+  ].join('\n');
+}
+
+function prepareReadToolCall(
+  call: PendingToolCall,
+  turnAttachments: EngineAttachment[]
+): PreparedPendingToolCall[] {
+  if (call.toolName !== 'Read') {
+    return [call];
+  }
+
+  const filePaths = firstUsableReadPathArray(call.input);
+  if (filePaths.length) {
+    return filePaths.map((filePath, index) => ({
+      ...call,
+      toolUseId: `${call.toolUseId}-${index + 1}`,
+      input: normalizeReadInput(call.input, filePath, { boundedDefaultLimit: true })
+    }));
+  }
+
+  const filePath = firstUsableReadPathValue(call.input);
+  if (filePath) {
+    return [
+      {
+        ...call,
+        input: normalizeReadInput(call.input, filePath)
+      }
+    ];
+  }
+
+  if (turnAttachments.length === 1) {
+    return [
+      {
+        ...call,
+        input: normalizeReadInput(call.input, turnAttachments[0]!.localPath)
+      }
+    ];
+  }
+
+  if (turnAttachments.length > 1) {
+    return [
+      {
+        ...call,
+        validationError: buildReadPathValidationError(call.input, turnAttachments)
+      }
+    ];
+  }
+
+  return [call];
+}
+
+function prepareMainToolCalls(
+  queuedCalls: PendingToolCall[],
+  turnAttachments: EngineAttachment[]
+): PreparedPendingToolCall[] {
+  return queuedCalls.flatMap((call) => prepareReadToolCall(call, turnAttachments));
 }
 
 function folderForAttachment(attachment: EngineAttachment): string {
@@ -725,6 +862,14 @@ function buildModelUserPrompt(
     'User prompt:',
     prompt
   ];
+
+  if (attachments.length > 1) {
+    lines.push(
+      '',
+      'Runtime instruction:',
+      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For file inspection, call one bounded Read per concrete file_path or use Grep with a targeted glob. Group findings by file type or purpose, wait for tool results, then produce one final answer.'
+    );
+  }
 
   if (explicitReportSuggestion?.canRun) {
     lines.push(
@@ -1325,6 +1470,19 @@ export function createEngine(input: {
     state.currentAssistantDraft = '';
   }
 
+  function emitAssistantDraftDelta(state: SessionState): void {
+    const content = state.currentAssistantDraft.trim();
+    if (!content) {
+      return;
+    }
+
+    emit(state, {
+      type: 'message.assistant.delta',
+      sessionId: state.session.id,
+      text: content
+    });
+  }
+
   function finalizeAgentAssistantDraft(state: SessionState, agentId: string): void {
     const agent = findAgentState(state, agentId);
     const content = agent.currentAssistantDraft.trim();
@@ -1591,6 +1749,7 @@ export function createEngine(input: {
       reasoning?: string;
       recoveryAttempt?: number;
       toolCatalogOverride?: EngineToolDescriptor[];
+      validationError?: string;
     } = {}
   ): Promise<ToolExecutionOutcome> {
     const toolCatalogForExecution = options.toolCatalogOverride ?? toolCatalog;
@@ -1654,6 +1813,10 @@ export function createEngine(input: {
 
     let result: EngineToolExecutionResult;
     try {
+      if (options.validationError) {
+        throw new Error(options.validationError);
+      }
+
       result =
         toolName === 'TodoWrite'
           ? applyTodoWrite(state, inputValue)
@@ -1911,9 +2074,10 @@ export function createEngine(input: {
   ): Promise<MainToolQueueResult> {
     state.pendingToolQueue = [];
     const spawnedAgentIds: string[] = [];
+    const preparedCalls = prepareMainToolCalls(queuedCalls, turnAttachments);
 
-    for (let index = 0; index < queuedCalls.length; index += 1) {
-      const call = queuedCalls[index]!;
+    for (let index = 0; index < preparedCalls.length; index += 1) {
+      const call = preparedCalls[index]!;
       const requestId = randomUUID();
       const toolDescriptor = findToolDescriptor(toolCatalog, call.toolName);
       const source = toolDescriptor?.source ?? 'builtin';
@@ -1926,7 +2090,7 @@ export function createEngine(input: {
         BUILTIN_TOOL_CATALOG.some((tool) => tool.name === call.toolName && tool.requiresApproval);
 
       if (requiresApproval) {
-        state.pendingToolQueue = queuedCalls.slice(index + 1);
+        state.pendingToolQueue = preparedCalls.slice(index + 1);
         const pendingApproval: PendingApproval = {
           requestId,
           toolUseId: call.toolUseId,
@@ -1977,7 +2141,8 @@ export function createEngine(input: {
         inputValue,
         {
           reasoning: call.reasoning,
-          recoveryAttempt
+          recoveryAttempt,
+          validationError: call.validationError
         }
       );
       if (executionOutcome === 'recoverable_failed') {
@@ -2190,13 +2355,6 @@ export function createEngine(input: {
       })) {
         if (event.type === 'assistant_delta') {
           state.currentAssistantDraft += event.text;
-          if (!shouldBufferAssistantForReport) {
-            emit(state, {
-              type: 'message.assistant.delta',
-              sessionId: state.session.id,
-              text: event.text
-            });
-          }
           continue;
         }
 
@@ -2239,8 +2397,11 @@ export function createEngine(input: {
             'The user explicitly requested jd-mcp log analysis for the attached diagnostic file.'
         };
         state.currentAssistantDraft = '';
-      } else {
+      } else if (!queuedCalls.length) {
+        emitAssistantDraftDelta(state);
         finalizeAssistantDraft(state);
+      } else {
+        state.currentAssistantDraft = '';
       }
 
       if (!queuedCalls.length) {
