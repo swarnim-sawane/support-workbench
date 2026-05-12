@@ -7,8 +7,10 @@ import {
 import { createWorkbenchApp } from './app.js';
 import { loadLocalEnv } from './env.js';
 import { JdMcpBridge } from './jdMcp.js';
+import { configureNodeFetchProxy } from './proxy.js';
 
 loadLocalEnv();
+configureNodeFetchProxy();
 
 const provider = new OcaModelProvider();
 const jdMcpBridge = new JdMcpBridge();
