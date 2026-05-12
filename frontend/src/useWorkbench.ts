@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
 import {
   createSession,
+  cancelTurn,
   deleteSession as deleteSessionApi,
   fetchHealth,
   fetchSessions,
@@ -228,6 +229,19 @@ export function useWorkbench() {
       setSnapshot(response.snapshot);
       setQueuedAttachmentIds([]);
       void refreshSessions(response.snapshot.workspace.cwd);
+    },
+    async onCancelTurn() {
+      if (!snapshot.sessionId) {
+        return;
+      }
+
+      try {
+        const nextSnapshot = await cancelTurn(snapshot.sessionId);
+        setSnapshot(nextSnapshot);
+        void refreshSessions(nextSnapshot.workspace.cwd);
+      } catch (cancelError) {
+        setError(cancelError instanceof Error ? cancelError.message : String(cancelError));
+      }
     },
     async onApprove(requestId: string, decision: 'allow' | 'deny') {
       if (!snapshot.sessionId) {

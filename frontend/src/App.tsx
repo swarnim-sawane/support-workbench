@@ -25,6 +25,7 @@ type AppProps = {
   onNewSession?: () => void | Promise<void>;
   onSelectSession?: (sessionId: string) => void | Promise<void>;
   onDeleteSession?: (sessionId: string) => void | Promise<void>;
+  onCancelTurn?: () => void | Promise<void>;
   isBooting?: boolean;
   error?: string | null;
 };
@@ -44,6 +45,7 @@ export function App({
   onNewSession = () => undefined,
   onSelectSession = () => undefined,
   onDeleteSession = () => undefined,
+  onCancelTurn = () => undefined,
   isBooting = false,
   error = null
 }: AppProps) {
@@ -164,6 +166,22 @@ export function App({
     }
 
     isSubmittingPromptRef.current = false;
+  }
+
+  async function handleCancelTurn() {
+    const result = onCancelTurn();
+    if (isPromiseLike(result)) {
+      try {
+        await result;
+      } finally {
+        isSubmittingPromptRef.current = false;
+        setIsSubmittingPrompt(false);
+      }
+      return;
+    }
+
+    isSubmittingPromptRef.current = false;
+    setIsSubmittingPrompt(false);
   }
 
   function hasDraggedFiles(event: DragEvent) {
@@ -339,6 +357,7 @@ export function App({
                   queuedAttachmentIds={queuedAttachmentIds}
                   textareaRef={composerTextareaRef}
                   onPromptSubmit={handlePromptSubmit}
+                  onCancelTurn={handleCancelTurn}
                   onAttachFiles={onAttachFiles}
                   onUnqueueAttachment={onUnqueueAttachment}
                   onDragEnterFiles={onDragEnterFiles}

@@ -23,6 +23,7 @@ function Root() {
       onNewSession={workbench.onNewSession}
       onSelectSession={workbench.onSelectSession}
       onDeleteSession={workbench.onDeleteSession}
+      onCancelTurn={workbench.onCancelTurn}
       isBooting={workbench.isBooting}
       error={workbench.error}
     />

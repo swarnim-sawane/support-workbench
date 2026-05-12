@@ -185,6 +185,18 @@ export function createWorkbenchApp(input: {
     }
   });
 
+  app.post('/api/session/:sessionId/cancel', async (req, res, next) => {
+    try {
+      await input.engine.cancelTurn(req.params.sessionId);
+      res.status(202).json({
+        accepted: true,
+        snapshot: input.engine.getSnapshot(req.params.sessionId)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/session/:sessionId/stream', (req, res, next) => {
     try {
       const sessionId = req.params.sessionId;
