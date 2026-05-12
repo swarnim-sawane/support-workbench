@@ -365,6 +365,10 @@ function isWorkspaceOwnedPath(cwd: string, filePath: string): boolean {
   return Boolean(relativePath) && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
 
+function isSafeSessionId(sessionId: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(sessionId);
+}
+
 function deleteWorkspaceOwnedReportFiles(cwd: string, artifacts: EngineReportArtifact[]): void {
   const deleted = new Set<string>();
   for (const artifact of artifacts) {
@@ -2649,6 +2653,10 @@ export function createEngine(input: {
     },
 
     deleteSession(sessionId, cwd) {
+      if (!isSafeSessionId(sessionId)) {
+        return false;
+      }
+
       const state = sessions.get(sessionId);
       const persisted = state ? null : loadPersistedSession(cwd, sessionId);
       if (!state && !persisted) {
