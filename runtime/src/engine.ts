@@ -525,12 +525,18 @@ function asPositiveInteger(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
 
-function logScanEvidencePriority(evidence: Record<string, unknown>): number {
+function logScanEvidenceCategory(evidence: Record<string, unknown>): {
+  name: string;
+  priority: number;
+} {
   const status = typeof evidence.status === 'string' ? evidence.status : '';
   const kind = typeof evidence.kind === 'string' ? evidence.kind.toLowerCase() : '';
   const content = typeof evidence.content === 'string' ? evidence.content.toLowerCase() : '';
   if (/^5\d\d$/.test(status) || kind.includes('http 5')) {
-    return 0;
+    return { name: 'http_5xx', priority: 0 };
+  }
+  if (/^4\d\d$/.test(status) || kind.includes('http 4')) {
+    return { name: 'http_4xx', priority: 1 };
   }
   if (
     kind.includes('exception') ||
@@ -541,15 +547,24 @@ function logScanEvidencePriority(evidence: Record<string, unknown>): number {
     content.includes('exception') ||
     content.includes('error')
   ) {
-    return 1;
+    return { name: 'error', priority: 2 };
   }
   if (typeof evidence.duration_ms === 'number') {
-    return 2;
+    return { name: 'slow_request', priority: 3 };
   }
   if (kind.includes('timeout') || content.includes('timeout')) {
-    return 3;
+    return { name: 'timeout', priority: 4 };
   }
-  return 4;
+  return { name: 'other', priority: 5 };
+}
+
+function logScanReadWindow(line: number): { offset: number; limit: number; end: number } {
+  const offset = Math.max(1, line - LOG_SCAN_EVIDENCE_CONTEXT_RADIUS);
+  return {
+    offset,
+    limit: LOG_SCAN_EVIDENCE_READ_LIMIT,
+    end: offset + LOG_SCAN_EVIDENCE_READ_LIMIT - 1
+  };
 }
 
 function collectLogScanEvidenceReads(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
@@ -570,11 +585,17 @@ function collectLogScanEvidenceReads(metadata: Record<string, unknown> | undefin
       if (!filePath || !line) {
         return null;
       }
+      const category = logScanEvidenceCategory(item);
+      const window = logScanReadWindow(line);
 
       return {
         filePath,
         line,
-        priority: logScanEvidencePriority(item),
+        offset: window.offset,
+        limit: window.limit,
+        end: window.end,
+        category: category.name,
+        priority: category.priority,
         durationMs: typeof item.duration_ms === 'number' ? item.duration_ms : 0
       };
     })
@@ -584,6 +605,10 @@ function collectLogScanEvidenceReads(metadata: Record<string, unknown> | undefin
       ): item is {
         filePath: string;
         line: number;
+        offset: number;
+        limit: number;
+        end: number;
+        category: string;
         priority: number;
         durationMs: number;
       } => Boolean(item)
@@ -596,24 +621,55 @@ function collectLogScanEvidenceReads(metadata: Record<string, unknown> | undefin
         left.line - right.line
     );
 
-  const seen = new Set<string>();
+  const overlapsSelectedWindow = (candidate: (typeof candidates)[number]) =>
+    selected.some(
+      (existing) =>
+        existing.filePath === candidate.filePath &&
+        candidate.offset <= existing.end &&
+        existing.offset <= candidate.end
+    );
+  const selectedKeys = new Set<string>();
   const selected: typeof candidates = [];
-  for (const candidate of candidates) {
-    const key = `${candidate.filePath}:${candidate.line}`;
-    if (seen.has(key)) {
-      continue;
+
+  const trySelect = (candidate: (typeof candidates)[number]): boolean => {
+    const key = `${candidate.filePath}:${candidate.offset}:${candidate.category}`;
+    if (selectedKeys.has(key) || overlapsSelectedWindow(candidate)) {
+      return false;
     }
-    seen.add(key);
+    selectedKeys.add(key);
     selected.push(candidate);
-    if (selected.length >= MAX_LOG_SCAN_EVIDENCE_READS) {
-      break;
+    return true;
+  };
+
+  const categories = ['http_5xx', 'http_4xx', 'error', 'slow_request', 'timeout', 'other'];
+  for (const category of categories) {
+    const seenFilesForCategory = new Set<string>();
+    for (const candidate of candidates.filter((item) => item.category === category)) {
+      if (selected.length >= MAX_LOG_SCAN_EVIDENCE_READS) {
+        break;
+      }
+      if (seenFilesForCategory.has(candidate.filePath)) {
+        continue;
+      }
+      if (trySelect(candidate)) {
+        seenFilesForCategory.add(candidate.filePath);
+      }
+    }
+  }
+
+  if (selected.length < MAX_LOG_SCAN_EVIDENCE_READS) {
+    for (const candidate of candidates) {
+      if (selected.length >= MAX_LOG_SCAN_EVIDENCE_READS) {
+        break;
+      }
+      trySelect(candidate);
     }
   }
 
   return selected.map((candidate) => ({
     file_path: candidate.filePath,
-    offset: Math.max(1, candidate.line - LOG_SCAN_EVIDENCE_CONTEXT_RADIUS),
-    limit: LOG_SCAN_EVIDENCE_READ_LIMIT
+    offset: candidate.offset,
+    limit: candidate.limit
   }));
 }
 

@@ -1403,6 +1403,171 @@ describe('createEngine', () => {
     );
   });
 
+  it('diversifies focused LogScan reads across distinct files and evidence types', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-log-diverse-'));
+    const accessPath = join(cwd, 'vm1_access.log');
+    const vbAccessPath = join(cwd, 'vm2_vb_access.log');
+    const catalinaPath = join(cwd, 'vm1_catalina_new.log');
+    writeFileSync(accessPath, 'access evidence\n');
+    writeFileSync(vbAccessPath, 'vb access evidence\n');
+    writeFileSync(catalinaPath, 'catalina evidence\n');
+
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        yield {
+          type: 'assistant_delta',
+          text: 'Final answer after diverse evidence reads.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const executeTool = vi.fn(async ({ toolName }: { toolName: string }) => ({
+      summary:
+        toolName === 'LogScan'
+          ? 'LogScan scanned 3 file(s), 1200 line(s); found 8 error(s), 0 severe event(s), 2 HTTP 5xx, and 4 slow request(s).'
+          : `Read focused evidence from ${toolName}`,
+      metadata:
+        toolName === 'LogScan'
+          ? {
+              scanned_entire_files: true,
+              total_files: 3,
+              scanned_files: 3,
+              totals: {
+                lines: 1200,
+                error: 8,
+                http_5xx: 2,
+                slow_requests: 4
+              },
+              critical_examples: [
+                {
+                  file: catalinaPath,
+                  line: 100,
+                  kind: 'oracle.jbo.JboException',
+                  content: 'ERROR oracle.jbo.JboException first clustered catalina line'
+                },
+                {
+                  file: catalinaPath,
+                  line: 105,
+                  kind: 'oracle.jbo.JboException',
+                  content: 'ERROR oracle.jbo.JboException second clustered catalina line'
+                },
+                {
+                  file: catalinaPath,
+                  line: 108,
+                  kind: 'oracle.jbo.JboException',
+                  content: 'ERROR oracle.jbo.JboException third clustered catalina line'
+                },
+                {
+                  file: accessPath,
+                  line: 220,
+                  kind: 'HTTP 500',
+                  status: '500',
+                  duration_ms: 9000,
+                  content: 'GET /security/remoteroles 500 9000'
+                },
+                {
+                  file: vbAccessPath,
+                  line: 300,
+                  kind: 'HTTP 500',
+                  status: '500',
+                  duration_ms: 12000,
+                  content: 'POST /resources/data 500 12000'
+                }
+              ],
+              slow_requests: [
+                {
+                  file: accessPath,
+                  line: 420,
+                  kind: 'slow_request',
+                  status: '200',
+                  duration_ms: 54000,
+                  content: 'POST /resources/data 200 54000'
+                },
+                {
+                  file: vbAccessPath,
+                  line: 540,
+                  kind: 'slow_request',
+                  status: '200',
+                  duration_ms: 50400,
+                  content: 'GET /AutomationManagementDet 200 50400'
+                }
+              ]
+            }
+          : {
+              content: 'focused evidence window'
+            }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd });
+    for (const [id, filePath] of [
+      ['att-access', accessPath],
+      ['att-vb-access', vbAccessPath],
+      ['att-catalina', catalinaPath]
+    ] as const) {
+      engine.addAttachment(session.id, {
+        id,
+        originalName: filePath.split(/[\\/]/).at(-1) ?? filePath,
+        storedName: filePath.split(/[\\/]/).at(-1) ?? filePath,
+        mediaType: 'application/octet-stream',
+        kind: 'text',
+        localPath: filePath,
+        size: 100,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: new Date().toISOString()
+      });
+    }
+
+    await engine.submitPrompt(session.id, 'Analyse these logs.', {
+      attachmentIds: ['att-access', 'att-vb-access', 'att-catalina']
+    });
+
+    const readCalls = executeTool.mock.calls
+      .map(([call]) => call as { toolName: string; input: Record<string, unknown> })
+      .filter((call) => call.toolName === 'Read');
+    expect(readCalls).toHaveLength(5);
+    expect(readCalls.map((call) => call.input.file_path)).toEqual(
+      expect.arrayContaining([accessPath, vbAccessPath, catalinaPath])
+    );
+    expect(readCalls.filter((call) => call.input.file_path === catalinaPath)).toHaveLength(1);
+    expect(readCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          input: expect.objectContaining({
+            file_path: accessPath,
+            offset: 210
+          })
+        }),
+        expect.objectContaining({
+          input: expect.objectContaining({
+            file_path: vbAccessPath,
+            offset: 290
+          })
+        }),
+        expect.objectContaining({
+          input: expect.objectContaining({
+            file_path: accessPath,
+            offset: 410
+          })
+        }),
+        expect.objectContaining({
+          input: expect.objectContaining({
+            file_path: vbAccessPath,
+            offset: 530
+          })
+        })
+      ])
+    );
+  });
+
   it('normalizes Read path aliases and expands path arrays into bounded concrete reads', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-read-inputs-'));
     const firstPath = join(cwd, 'first.log');
