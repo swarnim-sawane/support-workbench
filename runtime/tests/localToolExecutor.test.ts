@@ -95,6 +95,46 @@ describe('executeLocalTool', () => {
     });
   });
 
+  it('caps returned Grep content matches while preserving full aggregate counts', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-grep-cap-'));
+    writeFileSync(
+      join(cwd, 'access.log'),
+      Array.from({ length: 520 }, (_, index) => `ERROR access failure ${index + 1}`).join('\n')
+    );
+    writeFileSync(
+      join(cwd, 'catalina.log'),
+      Array.from({ length: 40 }, (_, index) => `SEVERE startup failure ${index + 1}`).join('\n')
+    );
+
+    const result = await executeLocalTool({
+      toolName: 'Grep',
+      input: {
+        pattern: 'ERROR|SEVERE',
+        glob: '*.log',
+        output_mode: 'content'
+      },
+      cwd,
+      sessionId: 'session-1'
+    });
+
+    expect(result.summary).toContain('Grep matched 560 result(s)');
+    expect(result.summary).toContain('returned 500');
+    expect(result.metadata).toMatchObject({
+      total_match_count: 560,
+      returned_match_count: 500,
+      omitted_match_count: 60,
+      truncated: true,
+      max_matches: 500
+    });
+    expect(result.metadata?.match_counts_by_file).toEqual(
+      expect.arrayContaining([
+        { file: 'access.log', count: 520 },
+        { file: 'catalina.log', count: 40 }
+      ])
+    );
+    expect(result.metadata?.matches).toHaveLength(500);
+  });
+
   it('discovers and loads local skills with Skill', async () => {
     const homeDir = mkdtempSync(join(tmpdir(), 'claude-oca-home-'));
     const skillDir = join(homeDir, '.agents', 'skills', 'demo-skill');

@@ -867,7 +867,7 @@ function buildModelUserPrompt(
     lines.push(
       '',
       'Runtime instruction:',
-      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For file inspection, call one bounded Read per concrete file_path or use Grep with a targeted glob. Group findings by file type or purpose, wait for tool results, then produce one final answer.'
+      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For file inspection, call one bounded Read per concrete file_path or use Grep with a targeted glob. If Grep reports truncated results, use the per-file counts to narrow follow-up searches or reads before drawing conclusions. Group findings by file type or purpose, correlate timestamps and shared identifiers across files when available, wait for tool results, then produce one final answer.'
     );
   }
 

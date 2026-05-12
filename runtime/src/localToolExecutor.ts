@@ -6,6 +6,8 @@ import { readSkill } from './skills.js';
 import type { EngineToolExecutor, EngineToolExecutionResult } from './types.js';
 
 const execFile = promisify(execFileCallback);
+const DEFAULT_GREP_MAX_MATCHES = 500;
+const MAX_GREP_MAX_MATCHES = 2_000;
 
 function resolveWithinCwd(cwd: string, targetPath: string): string {
   const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(cwd, targetPath);
@@ -92,6 +94,15 @@ function stripHtml(source: string): string {
     .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function positiveIntegerInput(value: unknown, fallback: number, maximum: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.min(Math.floor(parsed), maximum);
 }
 
 async function executeRead(
@@ -258,6 +269,11 @@ async function executeGrep(
 
   const glob = typeof input.glob === 'string' ? input.glob : '**/*';
   const outputMode = String(input.output_mode ?? 'files_with_matches');
+  const maxMatches = positiveIntegerInput(
+    input.max_matches,
+    DEFAULT_GREP_MAX_MATCHES,
+    MAX_GREP_MAX_MATCHES
+  );
   const multiline = Boolean(input.multiline ?? false);
   let ignoreCase = Boolean(input.ignore_case ?? false);
   if (typeof input.case_sensitive === 'boolean') {
@@ -289,40 +305,74 @@ async function executeGrep(
   );
 
   const matches: Array<Record<string, unknown>> = [];
+  const matchCountsByFile: Array<{ file: string; count: number }> = [];
+  let totalMatchCount = 0;
   for (const file of matchingFiles) {
     const content = await fs.readFile(file, 'utf8');
     const displayPath = toDisplayPath(cwd, file);
+    let fileMatchCount = 0;
     if (outputMode === 'content') {
       const lines = content.split('\n');
       lines.forEach((line, index) => {
         regex.lastIndex = 0;
         if (regex.test(line)) {
-          matches.push({
-            file: displayPath,
-            line: index + 1,
-            content: line
-          });
+          totalMatchCount += 1;
+          fileMatchCount += 1;
+          if (matches.length < maxMatches) {
+            matches.push({
+              file: displayPath,
+              line: index + 1,
+              content: line
+            });
+          }
         }
       });
+      if (fileMatchCount) {
+        matchCountsByFile.push({
+          file: displayPath,
+          count: fileMatchCount
+        });
+      }
       continue;
     }
 
     regex.lastIndex = 0;
     if (regex.test(content)) {
-      matches.push({
-        file: displayPath
+      totalMatchCount += 1;
+      fileMatchCount = 1;
+      if (matches.length < maxMatches) {
+        matches.push({
+          file: displayPath
+        });
+      }
+    }
+    if (fileMatchCount) {
+      matchCountsByFile.push({
+        file: displayPath,
+        count: fileMatchCount
       });
     }
   }
 
+  const truncated = totalMatchCount > matches.length;
+  const omittedMatchCount = Math.max(0, totalMatchCount - matches.length);
+
   return {
-    summary: `Grep matched ${matches.length} result(s)`,
+    summary: truncated
+      ? `Grep matched ${totalMatchCount} result(s); returned ${matches.length} and omitted ${omittedMatchCount}. Refine the pattern, glob, or max_matches for more detail.`
+      : `Grep matched ${totalMatchCount} result(s)`,
     metadata: {
       pattern,
       original_pattern: rawPattern,
       ignore_case: ignoreCase,
       glob,
       output_mode: outputMode,
+      max_matches: maxMatches,
+      total_match_count: totalMatchCount,
+      returned_match_count: matches.length,
+      omitted_match_count: omittedMatchCount,
+      truncated,
+      match_counts_by_file: matchCountsByFile,
       matches
     }
   };
