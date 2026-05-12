@@ -1,11 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { WorkbenchSessionSnapshot } from './types';
 
 describe('App', () => {
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
   it('renders the Codex-style shell, transcript events, and permission overlay', async () => {
     const onApprove = vi.fn();
     const onPromptSubmit = vi.fn();
@@ -910,6 +914,72 @@ describe('App', () => {
     expect(screen.getAllByText('/thread-dumps').length).toBeGreaterThan(0);
     expect(screen.getByText('/correlate-har-logs')).toBeInTheDocument();
     expect(screen.queryByText('Ctrl/Cmd+K')).not.toBeInTheDocument();
+  });
+
+  it('opens the full documentation view from the header menu and returns to the workbench', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    await user.click(screen.getByRole('button', { name: /more options/i }));
+    await user.click(screen.getByRole('menuitem', { name: /documentation/i }));
+
+    expect(screen.getByRole('main', { name: /support workbench documentation/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /support workbench documentation/i })).toBeInTheDocument();
+    expect(screen.getByText(/guided diagnostic workspace/i)).toBeInTheDocument();
+    expect(screen.getByText(/best for/i)).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /documentation section navigation/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /01 what support workbench does/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /slash-command workflows/i })).toBeInTheDocument();
+    expect(screen.getByText('/auto-triage')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/message support workbench/i)).not.toBeInTheDocument();
+
+    expect(window.location.pathname).toBe('/docs');
+
+    await user.click(
+      within(screen.getByRole('main', { name: /support workbench documentation/i })).getByRole('button', {
+        name: /back to workbench/i
+      })
+    );
+    expect(screen.getByPlaceholderText(/message support workbench/i)).toBeInTheDocument();
+    expect(screen.queryByRole('main', { name: /support workbench documentation/i })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('opens documentation directly from /docs and tracks hash section navigation', async () => {
+    window.history.pushState({}, '', '/docs#approval-flow');
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(screen.getByRole('main', { name: /support workbench documentation/i })).toBeInTheDocument();
+    const approvalLink = screen.getByRole('link', { name: /05 approval flow and safe execution/i });
+    expect(approvalLink).toHaveAttribute('aria-current', 'location');
+
+    await user.click(screen.getByRole('link', { name: /08 practical notes and limitations/i }));
+    expect(window.location.hash).toBe('#practical-notes');
+    expect(screen.getByRole('link', { name: /08 practical notes and limitations/i })).toHaveAttribute(
+      'aria-current',
+      'location'
+    );
   });
 
   it('renders session history rows and upload cards', async () => {

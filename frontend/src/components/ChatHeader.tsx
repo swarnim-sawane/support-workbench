@@ -1,4 +1,5 @@
 import {
+  BookOpenText,
   Check,
   CheckCircle2,
   Download,
@@ -19,10 +20,13 @@ type ChatHeaderProps = {
   workspaceOpen: boolean;
   workspaceCount: number;
   theme: WorkbenchTheme;
+  isDocumentationOpen: boolean;
   onToggleWorkspace: () => void;
   onDownloadChat: () => void;
   onSetTheme: (theme: WorkbenchTheme) => void;
   onOpenHelp: () => void;
+  onOpenDocumentation: () => void;
+  onBackToWorkbench: () => void;
 };
 
 export function ChatHeader({
@@ -31,10 +35,13 @@ export function ChatHeader({
   workspaceOpen,
   workspaceCount,
   theme,
+  isDocumentationOpen,
   onToggleWorkspace,
   onDownloadChat,
   onSetTheme,
-  onOpenHelp
+  onOpenHelp,
+  onOpenDocumentation,
+  onBackToWorkbench
 }: ChatHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -43,6 +50,11 @@ export function ChatHeader({
   function handleDownloadChat() {
     setMenuOpen(false);
     onDownloadChat();
+  }
+
+  function handleOpenDocumentation() {
+    setMenuOpen(false);
+    onOpenDocumentation();
   }
 
   useEffect(() => {
@@ -74,8 +86,8 @@ export function ChatHeader({
     <header className="chat-header">
       <div className="brand-lockup">
         <div>
-          <p className="eyebrow">Local diagnostic agent</p>
-          <h1>Support Workbench</h1>
+          <p className="eyebrow">{isDocumentationOpen ? 'Tool guide' : 'Local diagnostic agent'}</p>
+          <h1>{isDocumentationOpen ? 'Documentation' : 'Support Workbench'}</h1>
         </div>
       </div>
 
@@ -88,16 +100,27 @@ export function ChatHeader({
           {health.ok ? <Sparkles size={14} /> : <CheckCircle2 size={14} />}
           {modelLabel}
         </span>
-        <button
-          type="button"
-          className={`header-action ${workspaceOpen ? 'is-active' : ''}`}
-          aria-label={workspaceOpen ? 'Hide workspace' : 'Show workspace'}
-          onClick={onToggleWorkspace}
-        >
-          <PanelRight size={15} />
-          <span>Workspace</span>
-          {workspaceCount > 0 ? <em className="header-count">{workspaceCount}</em> : null}
-        </button>
+        {isDocumentationOpen ? (
+          <button
+            type="button"
+            className="header-action is-active"
+            onClick={onBackToWorkbench}
+          >
+            <BookOpenText size={15} />
+            <span>Back to Workbench</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`header-action ${workspaceOpen ? 'is-active' : ''}`}
+            aria-label={workspaceOpen ? 'Hide workspace' : 'Show workspace'}
+            onClick={onToggleWorkspace}
+          >
+            <PanelRight size={15} />
+            <span>Workspace</span>
+            {workspaceCount > 0 ? <em className="header-count">{workspaceCount}</em> : null}
+          </button>
+        )}
         <div className="header-menu-wrap" ref={menuRef}>
           <button
             type="button"
@@ -111,6 +134,13 @@ export function ChatHeader({
           </button>
           {menuOpen ? (
             <div className="header-menu" role="menu" aria-label="More options">
+              {!isDocumentationOpen ? (
+                <button type="button" role="menuitem" onClick={handleOpenDocumentation}>
+                  <BookOpenText size={15} />
+                  <span>Documentation</span>
+                </button>
+              ) : null}
+
               <button type="button" role="menuitem" onClick={handleDownloadChat}>
                 <Download size={15} />
                 <span>Download chat</span>

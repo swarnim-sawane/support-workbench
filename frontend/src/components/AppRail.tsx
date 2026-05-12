@@ -124,7 +124,11 @@ export function AppRail({
                     type="button"
                     className="session-delete-button"
                     aria-label={`Delete ${session.title}`}
-                    title={canDeleteSession(session) ? `Delete ${session.title}` : 'Cannot delete active chats'}
+                    title={
+                      canDeleteSession(session)
+                        ? `Delete ${session.title}`
+                        : 'Cannot delete chats while running or awaiting approval'
+                    }
                     onClick={(event) => {
                       event.stopPropagation();
                       setPendingDelete(session);

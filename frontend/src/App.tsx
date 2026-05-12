@@ -3,6 +3,7 @@ import { AppRail } from './components/AppRail';
 import { ApprovalOverlay } from './components/ApprovalOverlay';
 import { ChatHeader, type WorkbenchTheme } from './components/ChatHeader';
 import { Composer } from './components/Composer';
+import { DocumentationPage } from './components/DocumentationPage';
 import { HelpDrawer } from './components/HelpDrawer';
 import { MessageList } from './components/MessageList';
 import { ReportViewerDrawer } from './components/ReportViewerDrawer';
@@ -60,6 +61,7 @@ export function App({
   const [leftRailOpen, setLeftRailOpen] = useState(true);
   const [theme, setTheme] = useState<WorkbenchTheme>('light');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [documentationOpen, setDocumentationOpen] = useState(() => window.location.pathname === '/docs');
   const [composerDraft, setComposerDraft] = useState('');
   const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -108,6 +110,22 @@ export function App({
   function openReport(reportId: string) {
     setSelectedReportId(reportId);
     setReportViewerOpen(true);
+  }
+
+  function openDocumentation() {
+    setHelpOpen(false);
+    setReportViewerOpen(false);
+    setDocumentationOpen(true);
+    if (window.location.pathname !== '/docs') {
+      window.history.pushState({}, '', '/docs');
+    }
+  }
+
+  function backToWorkbench() {
+    setDocumentationOpen(false);
+    if (window.location.pathname !== '/') {
+      window.history.pushState({}, '', '/');
+    }
   }
 
   function downloadChat() {
@@ -217,6 +235,15 @@ export function App({
   }, []);
 
   useEffect(() => {
+    function onPopState() {
+      setDocumentationOpen(window.location.pathname === '/docs');
+    }
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     const scroller = chatScrollRef.current;
     if (!scroller || !chatNearBottomRef.current) {
       return;
@@ -268,70 +295,77 @@ export function App({
           workspaceOpen={workspaceOpen}
           workspaceCount={availableAttachments.length + snapshot.reports.artifacts.length}
           theme={theme}
+          isDocumentationOpen={documentationOpen}
           onToggleWorkspace={() => setWorkspaceOpen((current) => !current)}
           onDownloadChat={downloadChat}
           onSetTheme={setTheme}
           onOpenHelp={() => setHelpOpen(true)}
+          onOpenDocumentation={openDocumentation}
+          onBackToWorkbench={backToWorkbench}
         />
 
-        <main className="shell-main">
-          <section className="chat-shell" aria-label="Support Workbench conversation">
-            <section
-              ref={chatScrollRef}
-              className="chat-scroll-region"
-              onScroll={onChatScroll}
-            >
-              <MessageList
-                messages={deferredMessages}
+        {documentationOpen ? (
+          <DocumentationPage onBackToWorkbench={backToWorkbench} />
+        ) : (
+          <main className="shell-main">
+            <section className="chat-shell" aria-label="Support Workbench conversation">
+              <section
+                ref={chatScrollRef}
+                className="chat-scroll-region"
+                onScroll={onChatScroll}
+              >
+                <MessageList
+                  messages={deferredMessages}
+                  snapshot={snapshot}
+                  reportSuggestion={reportSuggestion}
+                  isBooting={isBooting}
+                  showThinking={showThinking}
+                  onOpenReport={openReport}
+                  onPromptSubmit={handlePromptSubmit}
+                />
+              </section>
+              <div className={`composer-dock ${snapshot.pendingApprovals.length ? 'has-approval' : ''}`}>
+                <ApprovalOverlay
+                  approvals={snapshot.pendingApprovals}
+                  onApprove={onApprove}
+                />
+                <Composer
+                  draft={composerDraft}
+                  setDraft={setComposerDraft}
+                  status={snapshot.status}
+                  isSubmitting={isSubmittingPrompt}
+                  isDraggingFiles={isDraggingFiles}
+                  queuedAttachments={queuedAttachments}
+                  queuedAttachmentIds={queuedAttachmentIds}
+                  textareaRef={composerTextareaRef}
+                  onPromptSubmit={handlePromptSubmit}
+                  onAttachFiles={onAttachFiles}
+                  onUnqueueAttachment={onUnqueueAttachment}
+                  onDragEnterFiles={onDragEnterFiles}
+                  onDragLeaveFiles={onDragLeaveFiles}
+                  onDragOverFiles={onDragOverFiles}
+                  onDropFiles={onDropFiles}
+                />
+              </div>
+            </section>
+
+            {workspaceOpen ? (
+              <WorkspaceSidebar
                 snapshot={snapshot}
+                availableAttachments={availableAttachments}
+                queuedAttachmentIds={queuedAttachmentIds}
+                activeTab={workspaceTab}
+                onTabChange={setWorkspaceTab}
                 reportSuggestion={reportSuggestion}
-                isBooting={isBooting}
-                showThinking={showThinking}
                 onOpenReport={openReport}
                 onPromptSubmit={handlePromptSubmit}
-              />
-            </section>
-            <div className={`composer-dock ${snapshot.pendingApprovals.length ? 'has-approval' : ''}`}>
-              <ApprovalOverlay
-                approvals={snapshot.pendingApprovals}
-                onApprove={onApprove}
-              />
-              <Composer
-                draft={composerDraft}
-                setDraft={setComposerDraft}
-                status={snapshot.status}
-                isSubmitting={isSubmittingPrompt}
-                isDraggingFiles={isDraggingFiles}
-                queuedAttachments={queuedAttachments}
-                queuedAttachmentIds={queuedAttachmentIds}
-                textareaRef={composerTextareaRef}
-                onPromptSubmit={handlePromptSubmit}
-                onAttachFiles={onAttachFiles}
+                onQueueAttachment={onQueueAttachment}
                 onUnqueueAttachment={onUnqueueAttachment}
-                onDragEnterFiles={onDragEnterFiles}
-                onDragLeaveFiles={onDragLeaveFiles}
-                onDragOverFiles={onDragOverFiles}
-                onDropFiles={onDropFiles}
+                onRemoveAttachment={onRemoveAttachment}
               />
-            </div>
-          </section>
-
-          {workspaceOpen ? (
-            <WorkspaceSidebar
-              snapshot={snapshot}
-              availableAttachments={availableAttachments}
-              queuedAttachmentIds={queuedAttachmentIds}
-              activeTab={workspaceTab}
-              onTabChange={setWorkspaceTab}
-              reportSuggestion={reportSuggestion}
-              onOpenReport={openReport}
-              onPromptSubmit={handlePromptSubmit}
-              onQueueAttachment={onQueueAttachment}
-              onUnqueueAttachment={onUnqueueAttachment}
-              onRemoveAttachment={onRemoveAttachment}
-            />
-          ) : null}
-        </main>
+            ) : null}
+          </main>
+        )}
       </div>
 
       <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
