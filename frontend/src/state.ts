@@ -172,12 +172,20 @@ type EngineEvent =
       status: 'completed' | 'blocked';
     };
 
+function createClientId(prefix: string): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function toSystemMessage(
   content: string,
   kind: WorkbenchMessage['kind'] = 'default'
 ): WorkbenchMessage {
   return {
-    id: `system-${crypto.randomUUID()}`,
+    id: createClientId('system'),
     role: 'system',
     content,
     kind
@@ -235,7 +243,7 @@ export function reduceEngineEvent(
         messages: [
           ...snapshot.messages,
           {
-            id: `assistant-draft-${crypto.randomUUID()}`,
+            id: createClientId('assistant-draft'),
             role: 'assistant',
             content: event.text,
             kind: 'default'

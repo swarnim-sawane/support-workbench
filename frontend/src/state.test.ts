@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { reduceEngineEvent } from './state';
 import type { WorkbenchSessionSnapshot } from './types';
 
@@ -53,6 +53,28 @@ const EMPTY_SNAPSHOT: WorkbenchSessionSnapshot = {
 };
 
 describe('reduceEngineEvent', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('creates assistant draft messages when crypto.randomUUID is unavailable', () => {
+    vi.stubGlobal('crypto', {});
+
+    const next = reduceEngineEvent(EMPTY_SNAPSHOT, {
+      type: 'message.assistant.delta',
+      sessionId: 'session-1',
+      text: 'Hello'
+    });
+
+    expect(next.messages).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^assistant-draft-/),
+        role: 'assistant',
+        content: 'Hello'
+      })
+    ]);
+  });
+
   it('preserves leaked tool names and metadata in approvals and transcript messages', () => {
     const awaitingApproval = reduceEngineEvent(EMPTY_SNAPSHOT, {
       type: 'permission.requested',
