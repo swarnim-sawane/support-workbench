@@ -28,6 +28,7 @@ const EMPTY_SNAPSHOT: WorkbenchSessionSnapshot = {
   skippedTools: [],
   reportSuggestion: null,
   pendingApprovals: [],
+  progressActivity: [],
   toolActivity: [],
   attachments: [],
   reports: {

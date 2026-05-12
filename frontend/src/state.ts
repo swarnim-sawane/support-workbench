@@ -4,6 +4,8 @@ import type {
   PendingApproval,
   WorkbenchHistorySummary,
   WorkbenchMessage,
+  WorkbenchProgressActivity,
+  WorkbenchProgressPhase,
   WorkbenchReportArtifact,
   WorkbenchSessionSnapshot,
   WorkbenchTask,
@@ -35,6 +37,31 @@ type EngineEvent =
       type: 'message.assistant.done';
       sessionId: string;
       message: WorkbenchMessage;
+    }
+  | {
+      type: 'progress.started';
+      sessionId: string;
+      id: string;
+      phase: WorkbenchProgressPhase;
+      label: string;
+      detail?: string;
+      status: 'running';
+      attachmentIds?: string[];
+      toolName?: string;
+      startedAt: string;
+    }
+  | {
+      type: 'progress.completed';
+      sessionId: string;
+      id: string;
+      phase: WorkbenchProgressPhase;
+      label: string;
+      detail?: string;
+      status: 'completed';
+      attachmentIds?: string[];
+      toolName?: string;
+      startedAt: string;
+      completedAt: string;
     }
   | {
       type: 'permission.requested';
@@ -202,6 +229,16 @@ function upsertToolActivity(
   ];
 }
 
+function upsertProgressActivity(
+  progressActivity: WorkbenchSessionSnapshot['progressActivity'] | undefined,
+  nextActivity: WorkbenchProgressActivity
+): WorkbenchSessionSnapshot['progressActivity'] {
+  return [
+    nextActivity,
+    ...(progressActivity ?? []).filter((activity) => activity.id !== nextActivity.id)
+  ].slice(0, 12);
+}
+
 function upsertAgent(
   agents: WorkbenchSessionSnapshot['agents'],
   nextAgent: WorkbenchBackgroundAgent
@@ -265,6 +302,22 @@ export function reduceEngineEvent(
         messages: [...snapshot.messages, event.message]
       };
     }
+    case 'progress.started':
+    case 'progress.completed':
+      return {
+        ...snapshot,
+        progressActivity: upsertProgressActivity(snapshot.progressActivity, {
+          id: event.id,
+          phase: event.phase,
+          label: event.label,
+          detail: event.detail,
+          status: event.status,
+          attachmentIds: event.attachmentIds,
+          toolName: event.toolName,
+          startedAt: event.startedAt,
+          completedAt: event.type === 'progress.completed' ? event.completedAt : undefined
+        })
+      };
     case 'permission.requested': {
       const pendingApproval: PendingApproval = {
         requestId: event.requestId,

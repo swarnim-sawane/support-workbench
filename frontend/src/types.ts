@@ -200,6 +200,25 @@ export type WorkbenchReportSuggestion = {
   reasonCode: WorkbenchToolSkipReasonCode;
 };
 
+export type WorkbenchProgressPhase =
+  | 'attachments.discovering'
+  | 'attachments.classifying'
+  | 'model.thinking'
+  | 'tool.executing'
+  | 'answer.preparing';
+
+export type WorkbenchProgressActivity = {
+  id: string;
+  phase: WorkbenchProgressPhase;
+  label: string;
+  detail?: string;
+  status: 'running' | 'completed';
+  attachmentIds?: string[];
+  toolName?: string;
+  startedAt: string;
+  completedAt?: string;
+};
+
 export type WorkbenchSessionSnapshot = {
   sessionId: string;
   status: 'idle' | 'running' | 'awaiting_approval' | 'blocked' | 'completed';
@@ -215,6 +234,7 @@ export type WorkbenchSessionSnapshot = {
   skippedTools: WorkbenchSkippedToolRecord[];
   reportSuggestion: WorkbenchReportSuggestion | null;
   pendingApprovals: PendingApproval[];
+  progressActivity: WorkbenchProgressActivity[];
   toolActivity: WorkbenchToolActivity[];
   attachments: WorkbenchAttachment[];
   reports: {

@@ -27,6 +27,8 @@ import type {
   EngineMemoryEntry,
   EngineMessage,
   EngineModelMessage,
+  EngineProgressActivity,
+  EngineProgressPhase,
   EngineReportArtifact,
   EngineReportSuggestion,
   EngineSession,
@@ -83,6 +85,7 @@ type SessionState = {
   agents: AgentState[];
   skippedTools: EngineSkippedToolRecord[];
   reportSuggestion: EngineReportSuggestion | null;
+  progressActivity: EngineProgressActivity[];
   toolActivity: EngineToolActivity[];
   attachments: EngineAttachment[];
   reportArtifacts: EngineReportArtifact[];
@@ -163,6 +166,7 @@ function toPersistedRecord(state: SessionState) {
     agents: state.agents.map(toPublicAgent),
     skippedTools: state.skippedTools,
     reportSuggestion: state.reportSuggestion,
+    progressActivity: state.progressActivity,
     toolActivity: state.toolActivity,
     attachments: state.attachments,
     reports: state.reportArtifacts,
@@ -188,6 +192,7 @@ function createSessionState(session: EngineSession): SessionState {
     agents: [],
     skippedTools: [],
     reportSuggestion: null,
+    progressActivity: [],
     toolActivity: [],
     attachments: [],
     reportArtifacts: [],
@@ -251,6 +256,7 @@ function hydrateSessionState(record: PersistedSessionRecord): SessionState {
     agents: (record.agents ?? []).map(hydrateAgentState),
     skippedTools: record.skippedTools ?? [],
     reportSuggestion: record.reportSuggestion ?? null,
+    progressActivity: record.progressActivity ?? [],
     toolActivity: record.toolActivity ?? [],
     attachments: record.attachments ?? [],
     reportArtifacts: record.reports ?? [],
@@ -887,6 +893,42 @@ function upsertToolActivity(
   ];
 }
 
+function upsertProgressActivity(
+  state: SessionState,
+  nextActivity: EngineProgressActivity
+): void {
+  state.progressActivity = [
+    nextActivity,
+    ...state.progressActivity.filter((activity) => activity.id !== nextActivity.id)
+  ].slice(0, 12);
+}
+
+function progressId(phase: EngineProgressPhase, key: string): string {
+  return `${phase}:${key}`;
+}
+
+function formatCount(count: number, singular: string, plural = `${singular}s`): string | null {
+  if (!count) {
+    return null;
+  }
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function compactAttachmentDetail(attachments: EngineAttachment[]): string {
+  const logCount = attachments.filter(isDiagnosticLikeTextAttachment).length;
+  const imageCount = attachments.filter((attachment) => attachment.kind === 'image').length;
+  const otherTextCount = attachments.filter(
+    (attachment) => attachment.kind === 'text' && !isDiagnosticLikeTextAttachment(attachment)
+  ).length;
+  const parts = [
+    formatCount(logCount, 'log'),
+    formatCount(imageCount, 'image'),
+    formatCount(otherTextCount, 'text file', 'text files')
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length ? parts.join(', ') : formatCount(attachments.length, 'file') ?? 'No files';
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1173,6 +1215,98 @@ export function createEngine(input: {
     }
   }
 
+  function startProgress(
+    state: SessionState,
+    input: {
+      id: string;
+      phase: EngineProgressPhase;
+      label: string;
+      detail?: string;
+      attachmentIds?: string[];
+      toolName?: string;
+    }
+  ): EngineProgressActivity {
+    const existing = state.progressActivity.find((activity) => activity.id === input.id);
+    if (existing?.status === 'running') {
+      return existing;
+    }
+
+    const activity: EngineProgressActivity = {
+      id: input.id,
+      phase: input.phase,
+      label: input.label,
+      detail: input.detail,
+      attachmentIds: input.attachmentIds,
+      toolName: input.toolName,
+      status: 'running',
+      startedAt: new Date().toISOString()
+    };
+    upsertProgressActivity(state, activity);
+    emit(state, {
+      type: 'progress.started',
+      sessionId: state.session.id,
+      id: activity.id,
+      phase: activity.phase,
+      label: activity.label,
+      detail: activity.detail,
+      status: 'running',
+      attachmentIds: activity.attachmentIds,
+      toolName: activity.toolName,
+      startedAt: activity.startedAt
+    });
+    return activity;
+  }
+
+  function completeProgress(
+    state: SessionState,
+    input: {
+      id: string;
+      phase: EngineProgressPhase;
+      label: string;
+      detail?: string;
+      attachmentIds?: string[];
+      toolName?: string;
+    }
+  ): EngineProgressActivity {
+    const existing = state.progressActivity.find((activity) => activity.id === input.id);
+    const activity: EngineProgressActivity = {
+      id: input.id,
+      phase: input.phase,
+      label: input.label,
+      detail: input.detail ?? existing?.detail,
+      attachmentIds: input.attachmentIds ?? existing?.attachmentIds,
+      toolName: input.toolName ?? existing?.toolName,
+      status: 'completed',
+      startedAt: existing?.startedAt ?? new Date().toISOString(),
+      completedAt: new Date().toISOString()
+    };
+    upsertProgressActivity(state, activity);
+    emit(state, {
+      type: 'progress.completed',
+      sessionId: state.session.id,
+      id: activity.id,
+      phase: activity.phase,
+      label: activity.label,
+      detail: activity.detail,
+      status: 'completed',
+      attachmentIds: activity.attachmentIds,
+      toolName: activity.toolName,
+      startedAt: activity.startedAt,
+      completedAt: activity.completedAt ?? activity.startedAt
+    });
+    return activity;
+  }
+
+  function completeRunningProgress(state: SessionState, phase: EngineProgressPhase): void {
+    const existing = state.progressActivity.find(
+      (activity) => activity.phase === phase && activity.status === 'running'
+    );
+    if (!existing) {
+      return;
+    }
+    completeProgress(state, existing);
+  }
+
   function pushSystemMessage(
     state: SessionState,
     content: string,
@@ -1200,6 +1334,7 @@ export function createEngine(input: {
       skippedTools: [...state.skippedTools],
       reportSuggestion: state.reportSuggestion ? { ...state.reportSuggestion } : null,
       pendingApprovals: [...state.pendingApprovals],
+      progressActivity: [...state.progressActivity],
       toolActivity: [...state.toolActivity],
       attachments: [...state.attachments],
       reports: {
@@ -1636,6 +1771,15 @@ export function createEngine(input: {
     if (options.agentId) {
       upsertAgentToolActivity(state, options.agentId, startedActivity);
     }
+    const toolProgressId = progressId('tool.executing', requestId);
+    if (!options.agentId) {
+      startProgress(state, {
+        id: toolProgressId,
+        phase: 'tool.executing',
+        label: `Running ${toolName}`,
+        toolName
+      });
+    }
     emit(state, {
       type: 'tool.execution.started',
       sessionId: state.session.id,
@@ -1731,6 +1875,12 @@ export function createEngine(input: {
       if (options.agentId) {
         upsertAgentToolActivity(state, options.agentId, failedActivity);
       } else {
+        completeProgress(state, {
+          id: toolProgressId,
+          phase: 'tool.executing',
+          label: `Running ${toolName}`,
+          toolName
+        });
         pushSystemMessage(
           state,
           recoverable
@@ -1857,6 +2007,13 @@ export function createEngine(input: {
     upsertToolActivity(state, completedActivity);
     if (options.agentId) {
       upsertAgentToolActivity(state, options.agentId, completedActivity);
+    } else {
+      completeProgress(state, {
+        id: toolProgressId,
+        phase: 'tool.executing',
+        label: `Running ${toolName}`,
+        toolName
+      });
     }
 
     emit(state, {
@@ -2160,6 +2317,7 @@ export function createEngine(input: {
     state: SessionState,
     options: {
       turnAttachments?: EngineAttachment[];
+      progressKey?: string;
       explicitReportRouting?: {
         skippedTool: EngineSkippedToolRecord | null;
         reportSuggestion: EngineReportSuggestion;
@@ -2181,6 +2339,25 @@ export function createEngine(input: {
         toolCatalog,
         integrations
       )}`;
+      const modelProgressDetail = options.turnAttachments?.length
+        ? formatCount(options.turnAttachments.length, 'file') + ' selected'
+        : undefined;
+      const showAttachmentProgress = Boolean(options.turnAttachments?.length);
+      const modelProgressId = showAttachmentProgress
+        ? progressId('model.thinking', `${options.progressKey ?? state.session.id}:${iteration}`)
+        : null;
+      let modelProgressCompleted = false;
+      let answerProgressStarted = false;
+      if (modelProgressId) {
+        startProgress(state, {
+          id: modelProgressId,
+          phase: 'model.thinking',
+          label: 'Analyzing uploaded evidence',
+          detail: modelProgressDetail,
+          attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+        });
+        persistState(state);
+      }
 
       for await (const event of input.provider.sendTurn(state.modelHistory, {
         sessionId: state.session.id,
@@ -2189,6 +2366,24 @@ export function createEngine(input: {
         tools: modelToolCatalog
       })) {
         if (event.type === 'assistant_delta') {
+          if (modelProgressId && !modelProgressCompleted) {
+            completeProgress(state, {
+              id: modelProgressId,
+              phase: 'model.thinking',
+              label: 'Analyzing uploaded evidence',
+              detail: modelProgressDetail,
+              attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+            });
+            modelProgressCompleted = true;
+          }
+          if (showAttachmentProgress && !answerProgressStarted) {
+            startProgress(state, {
+              id: progressId('answer.preparing', `${options.progressKey ?? state.session.id}:${iteration}`),
+              phase: 'answer.preparing',
+              label: 'Preparing final answer'
+            });
+            answerProgressStarted = true;
+          }
           state.currentAssistantDraft += event.text;
           if (!shouldBufferAssistantForReport) {
             emit(state, {
@@ -2205,6 +2400,16 @@ export function createEngine(input: {
         }
 
         if (event.type === 'tool_call') {
+          if (modelProgressId && !modelProgressCompleted) {
+            completeProgress(state, {
+              id: modelProgressId,
+              phase: 'model.thinking',
+              label: 'Analyzing uploaded evidence',
+              detail: modelProgressDetail,
+              attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+            });
+            modelProgressCompleted = true;
+          }
           queuedCalls.push({
             toolUseId: event.toolUseId ?? randomUUID(),
             toolName: event.toolName,
@@ -2241,9 +2446,20 @@ export function createEngine(input: {
         state.currentAssistantDraft = '';
       } else {
         finalizeAssistantDraft(state);
+        completeRunningProgress(state, 'answer.preparing');
       }
 
       if (!queuedCalls.length) {
+        if (modelProgressId && !modelProgressCompleted) {
+          completeProgress(state, {
+            id: modelProgressId,
+            phase: 'model.thinking',
+            label: 'Analyzing uploaded evidence',
+            detail: modelProgressDetail,
+            attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+          });
+        }
+        completeRunningProgress(state, 'answer.preparing');
         state.session.status = 'completed';
         emit(state, {
           type: 'turn.completed',
@@ -2697,6 +2913,7 @@ export function createEngine(input: {
       const explicitReportRouting = buildExplicitReportSuggestion(prompt, turnAttachments, toolCatalog);
       const visiblePrompt = buildVisibleUserPrompt(prompt, turnAttachments);
       const userMessage = createMessage('user', visiblePrompt);
+      const progressKey = userMessage.id;
       state.messages.push(userMessage);
 
       emit(state, {
@@ -2712,6 +2929,30 @@ export function createEngine(input: {
 
       if (await handleLocalCommand(state, prompt, stableStatus, turnAttachments)) {
         return;
+      }
+
+      if (turnAttachments.length) {
+        const attachmentIds = turnAttachments.map((attachment) => attachment.id);
+        const selectedDetail = `${turnAttachments.length} ${turnAttachments.length === 1 ? 'file' : 'files'} selected`;
+        const classifiedDetail = compactAttachmentDetail(turnAttachments);
+        const discoveryProgress = {
+          id: progressId('attachments.discovering', progressKey),
+          phase: 'attachments.discovering' as const,
+          label: 'Discovering uploaded files',
+          detail: selectedDetail,
+          attachmentIds
+        };
+        const classificationProgress = {
+          id: progressId('attachments.classifying', progressKey),
+          phase: 'attachments.classifying' as const,
+          label: 'Classifying uploaded files',
+          detail: classifiedDetail,
+          attachmentIds
+        };
+        startProgress(state, discoveryProgress);
+        completeProgress(state, discoveryProgress);
+        startProgress(state, classificationProgress);
+        completeProgress(state, classificationProgress);
       }
 
       if (explicitReportRouting.reportSuggestion && !explicitReportRouting.reportSuggestion.canRun) {
@@ -2732,6 +2973,7 @@ export function createEngine(input: {
       persistState(state);
 
       await runTurnLoop(state, {
+        progressKey,
         turnAttachments,
         explicitReportRouting: explicitReportRouting.reportSuggestion?.canRun
           ? {

@@ -17,6 +17,7 @@ const EMPTY_SNAPSHOT: WorkbenchSessionSnapshot = {
   skippedTools: [],
   reportSuggestion: null,
   pendingApprovals: [],
+  progressActivity: [],
   attachments: [],
   reports: {
     artifacts: []
@@ -314,6 +315,49 @@ describe('reduceEngineEvent', () => {
         requestId: 'req-2',
         status: 'failed',
         error: 'jdtools.jar missing'
+      })
+    ]);
+  });
+
+  it('tracks concise progress activity from runtime progress events', () => {
+    const started = reduceEngineEvent(EMPTY_SNAPSHOT, {
+      type: 'progress.started',
+      sessionId: 'session-1',
+      id: 'progress-1',
+      phase: 'attachments.classifying',
+      label: 'Classifying uploaded files',
+      detail: '2 logs, 1 text file',
+      status: 'running',
+      startedAt: '2026-04-24T00:00:00.000Z'
+    });
+
+    expect(started.progressActivity).toEqual([
+      expect.objectContaining({
+        id: 'progress-1',
+        phase: 'attachments.classifying',
+        label: 'Classifying uploaded files',
+        detail: '2 logs, 1 text file',
+        status: 'running'
+      })
+    ]);
+
+    const completed = reduceEngineEvent(started, {
+      type: 'progress.completed',
+      sessionId: 'session-1',
+      id: 'progress-1',
+      phase: 'attachments.classifying',
+      label: 'Classifying uploaded files',
+      detail: '2 logs, 1 text file',
+      status: 'completed',
+      startedAt: '2026-04-24T00:00:00.000Z',
+      completedAt: '2026-04-24T00:00:01.000Z'
+    });
+
+    expect(completed.progressActivity).toEqual([
+      expect.objectContaining({
+        id: 'progress-1',
+        status: 'completed',
+        completedAt: '2026-04-24T00:00:01.000Z'
       })
     ]);
   });

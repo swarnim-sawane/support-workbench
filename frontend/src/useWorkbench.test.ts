@@ -99,6 +99,7 @@ function buildSnapshot(sessionId: string): WorkbenchSessionSnapshot {
     skippedTools: [],
     reportSuggestion: null,
     pendingApprovals: [],
+    progressActivity: [],
     toolActivity: [],
     attachments: [],
     reports: {

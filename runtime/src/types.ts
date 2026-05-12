@@ -188,6 +188,27 @@ export type EngineReportSuggestion = {
   reasonCode: EngineToolSkipReasonCode;
 };
 
+export type EngineProgressPhase =
+  | 'attachments.discovering'
+  | 'attachments.classifying'
+  | 'model.thinking'
+  | 'tool.executing'
+  | 'answer.preparing';
+
+export type EngineProgressActivityStatus = 'running' | 'completed';
+
+export type EngineProgressActivity = {
+  id: string;
+  phase: EngineProgressPhase;
+  label: string;
+  detail?: string;
+  status: EngineProgressActivityStatus;
+  attachmentIds?: string[];
+  toolName?: string;
+  startedAt: string;
+  completedAt?: string;
+};
+
 export type EngineToolActivity = {
   requestId: string;
   toolUseId: string;
@@ -344,6 +365,31 @@ export type EngineEvent =
       type: 'message.assistant.done';
       sessionId: string;
       message: EngineMessage;
+    }
+  | {
+      type: 'progress.started';
+      sessionId: string;
+      id: string;
+      phase: EngineProgressPhase;
+      label: string;
+      detail?: string;
+      status: 'running';
+      attachmentIds?: string[];
+      toolName?: string;
+      startedAt: string;
+    }
+  | {
+      type: 'progress.completed';
+      sessionId: string;
+      id: string;
+      phase: EngineProgressPhase;
+      label: string;
+      detail?: string;
+      status: 'completed';
+      attachmentIds?: string[];
+      toolName?: string;
+      startedAt: string;
+      completedAt: string;
     }
   | {
       type: 'permission.requested';
@@ -511,6 +557,7 @@ export type EngineSessionSnapshot = {
   skippedTools: EngineSkippedToolRecord[];
   reportSuggestion: EngineReportSuggestion | null;
   pendingApprovals: PendingApproval[];
+  progressActivity: EngineProgressActivity[];
   toolActivity: EngineToolActivity[];
   attachments: EngineAttachment[];
   reports: {
