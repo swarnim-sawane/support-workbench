@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  CheckCircle2,
   LoaderCircle,
   Paperclip,
   SendHorizonal,
@@ -57,7 +56,10 @@ export function Composer({
   onDropFiles
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const hasDetailedUploadItems = uploadItems.some((item) => item.stage !== 'ready');
+  const activeUploadItems = uploadItems.filter(
+    (item) => item.stage === 'uploading' || item.stage === 'processing'
+  );
+  const hasActiveUploadItems = activeUploadItems.length > 0;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -108,39 +110,19 @@ export function Composer({
     >
       <div className="composer-box">
         {isDraggingFiles ? <div className="drop-target-label">Drop files to attach</div> : null}
-        {uploadItems.length || queuedAttachments.length ? (
-          <div className={`composer-attachment-tray ${hasDetailedUploadItems ? '' : 'is-horizontal'}`}>
-            {uploadItems.length ? <UploadProgressPanel items={uploadItems} /> : null}
+        {hasActiveUploadItems || queuedAttachments.length ? (
+          <div className={`composer-attachment-tray ${hasActiveUploadItems ? '' : 'is-horizontal'}`}>
+            {hasActiveUploadItems ? <UploadProgressPanel items={activeUploadItems} /> : null}
 
             {queuedAttachments.length ? (
               <div className="queued-attachments" aria-label="Queued attachments">
-                {queuedAttachments.length > 1 ? (
-                  <details className="queued-case-summary">
-                    <summary>
-                      <span>
-                        <strong>{queuedAttachments.length} files queued as one case</strong>
-                        <small>{formatBytes(totalQueuedSize(queuedAttachments))} selected - details available</small>
-                      </span>
-                    </summary>
-                    <div className="queued-case-list">
-                      {queuedAttachments.map((attachment) => (
-                        <QueuedAttachmentChip
-                          key={attachment.id}
-                          attachment={attachment}
-                          onUnqueueAttachment={onUnqueueAttachment}
-                        />
-                      ))}
-                    </div>
-                  </details>
-                ) : (
-                  queuedAttachments.map((attachment) => (
-                    <QueuedAttachmentChip
-                      key={attachment.id}
-                      attachment={attachment}
-                      onUnqueueAttachment={onUnqueueAttachment}
-                    />
-                  ))
-                )}
+                {queuedAttachments.map((attachment) => (
+                  <QueuedAttachmentChip
+                    key={attachment.id}
+                    attachment={attachment}
+                    onUnqueueAttachment={onUnqueueAttachment}
+                  />
+                ))}
               </div>
             ) : null}
           </div>
@@ -194,24 +176,21 @@ export function Composer({
 
 function UploadProgressPanel({ items }: { items: WorkbenchUploadItem[] }) {
   const summary = buildUploadSummary(items);
-  const visibleItems = items.filter((item) => item.stage !== 'ready');
-  const readyCount = items.filter((item) => item.stage === 'ready').length;
-  const isReadyOnly = readyCount > 0 && visibleItems.length === 0;
 
   return (
     <div
-      className={`upload-progress-panel ${isReadyOnly ? 'is-compact-ready' : ''}`}
+      className="upload-progress-panel"
       role="status"
       aria-live="polite"
       aria-label={summary}
     >
       <div className="upload-progress-head">
-        {isReadyOnly ? <CheckCircle2 size={15} aria-hidden="true" /> : <UploadCloud size={15} aria-hidden="true" />}
-        <strong>{isReadyOnly ? formatReadyUploadCount(readyCount) : summary}</strong>
+        <UploadCloud size={15} aria-hidden="true" />
+        <strong>{summary}</strong>
       </div>
-      {visibleItems.length ? (
+      {items.length ? (
         <ul className="upload-progress-list">
-          {visibleItems.map((item) => (
+          {items.map((item) => (
             <li key={item.id} className={`upload-progress-item is-${item.stage}`}>
               <span className="upload-progress-icon" aria-hidden="true">
                 {item.stage === 'failed' ? (
@@ -243,12 +222,10 @@ function UploadProgressPanel({ items }: { items: WorkbenchUploadItem[] }) {
 function buildUploadSummary(items: WorkbenchUploadItem[]): string {
   const uploading = items.filter((item) => item.stage === 'uploading').length;
   const processing = items.filter((item) => item.stage === 'processing').length;
-  const ready = items.filter((item) => item.stage === 'ready').length;
   const failed = items.filter((item) => item.stage === 'failed').length;
   const parts = [
     formatUploadCount(uploading, 'Uploading'),
     formatUploadCount(processing, 'processing'),
-    ready ? `${ready} ready` : null,
     failed ? `${failed} failed` : null
   ].filter(Boolean);
 
@@ -261,10 +238,6 @@ function formatUploadCount(count: number, label: string): string | null {
   }
 
   return `${label} ${count} ${count === 1 ? 'file' : 'files'}`;
-}
-
-function formatReadyUploadCount(count: number): string {
-  return `${count} ${count === 1 ? 'file' : 'files'} ready`;
 }
 
 function buildUploadItemMessage(item: WorkbenchUploadItem): string {
@@ -304,6 +277,3 @@ function QueuedAttachmentChip({
   );
 }
 
-function totalQueuedSize(attachments: WorkbenchAttachment[]): number {
-  return attachments.reduce((total, attachment) => total + attachment.size, 0);
-}

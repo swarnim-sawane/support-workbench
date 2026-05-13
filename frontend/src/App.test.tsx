@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import type { WorkbenchSessionSnapshot, WorkbenchUploadItem } from './types';
 
 describe('App', () => {
   afterEach(() => {
+    vi.useRealTimers();
     window.history.pushState({}, '', '/');
   });
 
@@ -825,7 +826,7 @@ describe('App', () => {
     expect(screen.queryByText(/terminal failure/i)).not.toBeInTheDocument();
   });
 
-  it('summarizes multi-file queued attachments without losing removal or submit behavior', async () => {
+  it('shows multi-file queued attachments as horizontal composer chips without losing behavior', async () => {
     const user = userEvent.setup();
     const onPromptSubmit = vi.fn();
     const onUnqueueAttachment = vi.fn();
@@ -849,9 +850,11 @@ describe('App', () => {
       onUnqueueAttachment
     });
 
-    expect(screen.getByText('3 files queued as one case')).toBeInTheDocument();
+    expect(screen.queryByText(/files queued as one case/i)).not.toBeInTheDocument();
+    const oldAccessChip = screen.getByRole('button', { name: /remove queued attachment vm1_access_old\.log/i });
+    expect(oldAccessChip.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
+    expect(screen.getByRole('button', { name: /remove queued attachment vm1_access_new\.log/i })).toBeInTheDocument();
 
-    await user.click(screen.getByText('3 files queued as one case'));
     await user.click(screen.getByRole('button', { name: /remove queued attachment vm2_catalina_new\.log/i }));
     expect(onUnqueueAttachment).toHaveBeenCalledWith('att-catalina');
 
@@ -1117,7 +1120,8 @@ describe('App', () => {
     expect(onAttachFiles).toHaveBeenCalledWith([droppedFile]);
   });
 
-  it('shows per-file upload progress and ready processing states', () => {
+  it('shows active upload progress and moves failed uploads to a temporary toast', () => {
+    vi.useFakeTimers();
     const noop = vi.fn();
     const uploadItems: WorkbenchUploadItem[] = [
       {
@@ -1200,9 +1204,7 @@ describe('App', () => {
       onUnqueueAttachment: noop
     });
 
-    const uploadStatus = screen.getByRole('status', {
-      name: /uploading 1 file, processing 1 file, 1 failed/i
-    });
+    const uploadStatus = screen.getByRole('status', { name: /uploading 1 file, processing 1 file/i });
     expect(uploadStatus.closest('.composer-box')).toBeTruthy();
     expect(within(uploadStatus).getByText('trace.log')).toBeInTheDocument();
     expect(within(uploadStatus).getByText(/uploading 42%/i)).toBeInTheDocument();
@@ -1210,13 +1212,21 @@ describe('App', () => {
       within(uploadStatus).getByRole('progressbar', { name: /trace\.log upload progress/i })
     ).toHaveAttribute('value', '42');
     expect(within(uploadStatus).getByText(/processing OCR and indexing/i)).toBeInTheDocument();
-    expect(within(uploadStatus).getByText(/unsupported attachment type: broken\.zip/i)).toBeInTheDocument();
+    expect(within(uploadStatus).queryByText(/unsupported attachment type: broken\.zip/i)).not.toBeInTheDocument();
+    const failedToast = screen.getByRole('alert');
+    expect(within(failedToast).getByText('broken.zip')).toBeInTheDocument();
+    expect(within(failedToast).getByText(/unsupported attachment type: broken\.zip/i)).toBeInTheDocument();
     expect(screen.getByText(/ready for analysis/i)).toBeInTheDocument();
     expect(screen.getByText(/OCR ready/i)).toBeInTheDocument();
     expect(screen.getByText(/OCR failed/i)).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('keeps ready upload confirmation compact inside the composer', () => {
+  it('hides completed upload confirmation while keeping queued files in the composer', () => {
     const noop = vi.fn();
     const uploadItems: WorkbenchUploadItem[] = [
       {
@@ -1278,13 +1288,11 @@ describe('App', () => {
       onUnqueueAttachment: noop
     });
 
-    const uploadStatus = screen.getByRole('status', { name: /2 ready/i });
-    expect(uploadStatus.closest('.composer-box')).toBeTruthy();
-    expect(uploadStatus.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
-    expect(within(uploadStatus).getByText(/2 files ready/i)).toBeInTheDocument();
-    expect(within(uploadStatus).queryByText('vm1_access.log')).not.toBeInTheDocument();
-    expect(within(uploadStatus).queryByText('vm2_access.log')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /remove queued attachment vm1_access\.log/i })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /ready/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/2 files ready/i)).not.toBeInTheDocument();
+    const vm1Chip = screen.getByRole('button', { name: /remove queued attachment vm1_access\.log/i });
+    expect(vm1Chip.closest('.composer-box')).toBeTruthy();
+    expect(vm1Chip.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
     expect(screen.getByRole('button', { name: /remove queued attachment vm2_access\.log/i })).toBeInTheDocument();
   });
 

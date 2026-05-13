@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, type DragEvent } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import { AppRail } from './components/AppRail';
 import { ApprovalOverlay } from './components/ApprovalOverlay';
 import { ChatHeader, type WorkbenchTheme } from './components/ChatHeader';
@@ -8,6 +9,7 @@ import { HelpDrawer } from './components/HelpDrawer';
 import { MessageList } from './components/MessageList';
 import { ReportViewerDrawer } from './components/ReportViewerDrawer';
 import { WorkspaceSidebar, type WorkspaceTab } from './components/WorkspaceSidebar';
+import { formatBytes } from './components/utils';
 import type {
   WorkbenchHealth,
   WorkbenchSessionSnapshot,
@@ -34,6 +36,15 @@ type AppProps = {
   isBooting?: boolean;
   error?: string | null;
 };
+
+type UploadToast = {
+  id: string;
+  name: string;
+  size: number;
+  message: string;
+};
+
+const UPLOAD_TOAST_TIMEOUT_MS = 5600;
 
 export function App({
   snapshot,
@@ -73,11 +84,23 @@ export function App({
   const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const previousReportIdsRef = useRef<string[]>([]);
+  const shownUploadToastIdsRef = useRef<Set<string>>(new Set());
+  const uploadToastTimersRef = useRef<Map<string, number>>(new Map());
   const dragDepthRef = useRef(0);
   const isSubmittingPromptRef = useRef(false);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const chatScrollRef = useRef<HTMLElement | null>(null);
   const chatNearBottomRef = useRef(true);
+  const [uploadToasts, setUploadToasts] = useState<UploadToast[]>([]);
+
+  function dismissUploadToast(id: string) {
+    const timerId = uploadToastTimersRef.current.get(id);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      uploadToastTimersRef.current.delete(id);
+    }
+    setUploadToasts((current) => current.filter((toast) => toast.id !== id));
+  }
 
   useEffect(() => {
     if (!snapshot.reports.artifacts.length) {
@@ -105,6 +128,40 @@ export function App({
         : snapshot.reports.artifacts[0]?.id ?? null;
     });
   }, [snapshot.reports.artifacts]);
+
+  useEffect(() => {
+    for (const item of uploadItems) {
+      if (item.stage !== 'failed' || shownUploadToastIdsRef.current.has(item.id)) {
+        continue;
+      }
+
+      shownUploadToastIdsRef.current.add(item.id);
+      setUploadToasts((current) => [
+        ...current,
+        {
+          id: item.id,
+          name: item.name,
+          size: item.size,
+          message: item.error ?? item.message ?? 'Upload failed'
+        }
+      ]);
+
+      const timerId = window.setTimeout(() => {
+        uploadToastTimersRef.current.delete(item.id);
+        setUploadToasts((current) => current.filter((toast) => toast.id !== item.id));
+      }, UPLOAD_TOAST_TIMEOUT_MS);
+      uploadToastTimersRef.current.set(item.id, timerId);
+    }
+  }, [uploadItems]);
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of uploadToastTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+      uploadToastTimersRef.current.clear();
+    };
+  }, []);
 
   const reportSuggestion =
     !snapshot.reports.artifacts.length && snapshot.reportSuggestion ? snapshot.reportSuggestion : null;
@@ -384,6 +441,45 @@ export function App({
         open={reportViewerOpen}
         onClose={() => setReportViewerOpen(false)}
       />
+      <UploadToastRegion toasts={uploadToasts} onDismiss={dismissUploadToast} />
+    </div>
+  );
+}
+
+function UploadToastRegion({
+  toasts,
+  onDismiss
+}: {
+  toasts: UploadToast[];
+  onDismiss: (id: string) => void;
+}) {
+  if (!toasts.length) {
+    return null;
+  }
+
+  return (
+    <div className="toast-region" role="region" aria-label="Upload notifications">
+      {toasts.map((toast) => (
+        <article key={toast.id} className="upload-toast" role="alert">
+          <span className="upload-toast-icon" aria-hidden="true">
+            <AlertTriangle size={16} />
+          </span>
+          <span className="upload-toast-copy">
+            <strong title={toast.name}>{toast.name}</strong>
+            <small>
+              {formatBytes(toast.size)} - {toast.message}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="upload-toast-dismiss"
+            aria-label={`Dismiss ${toast.name}`}
+            onClick={() => onDismiss(toast.id)}
+          >
+            <X size={14} />
+          </button>
+        </article>
+      ))}
     </div>
   );
 }

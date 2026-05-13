@@ -259,7 +259,7 @@ export function useWorkbench() {
       const uploadIds = new Set(uploadBatch.map((item) => item.id));
       setError(null);
       setUploadItems((current) => [
-        ...current.filter((item) => item.stage !== 'ready'),
+        ...current.filter((item) => item.stage === 'uploading' || item.stage === 'processing'),
         ...uploadBatch
       ]);
 
@@ -275,7 +275,6 @@ export function useWorkbench() {
         void refreshSessions(response.snapshot.workspace.cwd);
       } catch (uploadError) {
         const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
-        setError(message);
         setUploadItems((current) => markUploadBatchFailed(current, uploadIds, message));
       }
     },
