@@ -16,10 +16,23 @@ export function formatBytes(size: number): string {
 }
 
 export function buildAttachmentStatus(attachment: WorkbenchAttachment): string {
-  if (attachment.kind === 'image') {
-    return `OCR ${attachment.ocrStatus}`;
+  if (attachment.promptVisibility === 'removed') {
+    return 'Removed';
   }
-  return attachment.kind;
+
+  if (attachment.kind === 'image') {
+    if (attachment.ocrStatus === 'pending') {
+      return 'OCR pending';
+    }
+    if (attachment.ocrStatus === 'completed') {
+      return 'OCR ready';
+    }
+    if (attachment.ocrStatus === 'failed') {
+      return 'OCR failed';
+    }
+  }
+
+  return 'Ready for analysis';
 }
 
 export function buildReportPath(sessionId: string, reportId: string): string {

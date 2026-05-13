@@ -8,13 +8,19 @@ import { HelpDrawer } from './components/HelpDrawer';
 import { MessageList } from './components/MessageList';
 import { ReportViewerDrawer } from './components/ReportViewerDrawer';
 import { WorkspaceSidebar, type WorkspaceTab } from './components/WorkspaceSidebar';
-import type { WorkbenchHealth, WorkbenchSessionSnapshot, WorkbenchSessionSummary } from './types';
+import type {
+  WorkbenchHealth,
+  WorkbenchSessionSnapshot,
+  WorkbenchSessionSummary,
+  WorkbenchUploadItem
+} from './types';
 
 type AppProps = {
   snapshot: WorkbenchSessionSnapshot;
   sessions?: WorkbenchSessionSummary[];
   activeSessionId?: string | null;
   queuedAttachmentIds: string[];
+  uploadItems?: WorkbenchUploadItem[];
   health: WorkbenchHealth;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
   onApprove: (requestId: string, decision: 'allow' | 'deny') => void | Promise<void>;
@@ -34,6 +40,7 @@ export function App({
   sessions = [],
   activeSessionId = snapshot.sessionId || null,
   queuedAttachmentIds,
+  uploadItems = [],
   health,
   onPromptSubmit,
   onApprove,
@@ -335,6 +342,7 @@ export function App({
                   status={snapshot.status}
                   isSubmitting={isSubmittingPrompt}
                   isDraggingFiles={isDraggingFiles}
+                  uploadItems={uploadItems}
                   queuedAttachments={queuedAttachments}
                   queuedAttachmentIds={queuedAttachmentIds}
                   textareaRef={composerTextareaRef}

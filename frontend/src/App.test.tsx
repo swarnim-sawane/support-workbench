@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import type { WorkbenchSessionSnapshot } from './types';
+import type { WorkbenchSessionSnapshot, WorkbenchUploadItem } from './types';
 
 describe('App', () => {
   afterEach(() => {
@@ -784,6 +784,177 @@ describe('App', () => {
     expect(onAttachFiles).toHaveBeenCalledWith([droppedFile]);
   });
 
+  it('shows per-file upload progress and ready processing states', () => {
+    const noop = vi.fn();
+    const uploadItems: WorkbenchUploadItem[] = [
+      {
+        id: 'upload-trace',
+        name: 'trace.log',
+        size: 2048,
+        stage: 'uploading',
+        progress: 42,
+        message: 'Uploading 42%'
+      },
+      {
+        id: 'upload-image',
+        name: 'error.png',
+        size: 1024,
+        stage: 'processing',
+        progress: 100,
+        message: 'Processing OCR and indexing'
+      },
+      {
+        id: 'upload-broken',
+        name: 'broken.zip',
+        size: 4096,
+        stage: 'failed',
+        progress: 100,
+        error: 'Unsupported attachment type: broken.zip'
+      }
+    ];
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      attachments: [
+        {
+          id: 'att-ready',
+          originalName: 'ready.log',
+          storedName: 'ready.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/ready.log',
+          size: 42,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        },
+        {
+          id: 'att-ocr-ready',
+          originalName: 'ocr-ready.png',
+          storedName: 'ocr-ready.png',
+          mediaType: 'image/png',
+          kind: 'image',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/ocr-ready.png',
+          size: 128,
+          promptVisibility: 'available',
+          ocrStatus: 'completed',
+          extractedText: 'HTTP 500 on localhost',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        },
+        {
+          id: 'att-ocr-failed',
+          originalName: 'ocr-failed.png',
+          storedName: 'ocr-failed.png',
+          mediaType: 'image/png',
+          kind: 'image',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/ocr-failed.png',
+          size: 128,
+          promptVisibility: 'available',
+          ocrStatus: 'failed',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      uploadItems,
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const uploadStatus = screen.getByRole('status', {
+      name: /uploading 1 file, processing 1 file, 1 failed/i
+    });
+    expect(uploadStatus.closest('.composer-box')).toBeTruthy();
+    expect(within(uploadStatus).getByText('trace.log')).toBeInTheDocument();
+    expect(within(uploadStatus).getByText(/uploading 42%/i)).toBeInTheDocument();
+    expect(
+      within(uploadStatus).getByRole('progressbar', { name: /trace\.log upload progress/i })
+    ).toHaveAttribute('value', '42');
+    expect(within(uploadStatus).getByText(/processing OCR and indexing/i)).toBeInTheDocument();
+    expect(within(uploadStatus).getByText(/unsupported attachment type: broken\.zip/i)).toBeInTheDocument();
+    expect(screen.getByText(/ready for analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/OCR ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/OCR failed/i)).toBeInTheDocument();
+  });
+
+  it('keeps ready upload confirmation compact inside the composer', () => {
+    const noop = vi.fn();
+    const uploadItems: WorkbenchUploadItem[] = [
+      {
+        id: 'upload-ready-1',
+        name: 'vm1_access.log',
+        size: 2048,
+        stage: 'ready',
+        progress: 100,
+        message: 'Ready for analysis'
+      },
+      {
+        id: 'upload-ready-2',
+        name: 'vm2_access.log',
+        size: 4096,
+        stage: 'ready',
+        progress: 100,
+        message: 'Ready for analysis'
+      }
+    ];
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      attachments: [
+        {
+          id: 'att-vm1',
+          originalName: 'vm1_access.log',
+          storedName: 'vm1_access.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/vm1_access.log',
+          size: 2048,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        },
+        {
+          id: 'att-vm2',
+          originalName: 'vm2_access.log',
+          storedName: 'vm2_access.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/vm2_access.log',
+          size: 4096,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      uploadItems,
+      queuedAttachmentIds: ['att-vm1', 'att-vm2'],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const uploadStatus = screen.getByRole('status', { name: /2 ready/i });
+    expect(uploadStatus.closest('.composer-box')).toBeTruthy();
+    expect(uploadStatus.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
+    expect(within(uploadStatus).getByText(/2 files ready/i)).toBeInTheDocument();
+    expect(within(uploadStatus).queryByText('vm1_access.log')).not.toBeInTheDocument();
+    expect(within(uploadStatus).queryByText('vm2_access.log')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove queued attachment vm1_access\.log/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove queued attachment vm2_access\.log/i })).toBeInTheDocument();
+  });
+
   it('supports approval keyboard shortcuts and expandable runtime details', async () => {
     const user = userEvent.setup();
     const onApprove = vi.fn();
@@ -1125,6 +1296,7 @@ type RenderWorkbenchInput = {
   snapshot: WorkbenchSessionSnapshot;
   sessions?: ComponentProps<typeof App>['sessions'];
   activeSessionId?: string | null;
+  uploadItems?: WorkbenchUploadItem[];
   queuedAttachmentIds: string[];
   onPromptSubmit: ReturnType<typeof vi.fn>;
   onApprove: ReturnType<typeof vi.fn>;
@@ -1143,6 +1315,7 @@ function renderWorkbench(input: RenderWorkbenchInput) {
       snapshot={input.snapshot}
       sessions={input.sessions}
       activeSessionId={input.activeSessionId}
+      uploadItems={input.uploadItems}
       health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
       queuedAttachmentIds={input.queuedAttachmentIds}
       onPromptSubmit={input.onPromptSubmit}

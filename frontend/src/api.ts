@@ -3,7 +3,8 @@ import type {
   WorkbenchAttachment,
   WorkbenchHealth,
   WorkbenchSessionSummary,
-  WorkbenchSessionSnapshot
+  WorkbenchSessionSnapshot,
+  WorkbenchUploadProgressUpdate
 } from './types';
 
 type SessionResponse = {
@@ -31,6 +32,8 @@ type AttachmentResponse = SnapshotResponse & {
 type SessionsResponse = {
   sessions: WorkbenchSessionSummary[];
 };
+
+type UploadProgressCallback = (progress: WorkbenchUploadProgressUpdate) => void;
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -86,19 +89,116 @@ export async function submitPrompt(
 
 export async function uploadAttachments(
   sessionId: string,
-  files: File[]
+  files: File[],
+  onProgress?: UploadProgressCallback
 ): Promise<AttachmentResponse> {
   const formData = new FormData();
   for (const file of files) {
     formData.append('files', file);
   }
 
-  const response = await fetch(`/api/session/${sessionId}/attachments`, {
-    method: 'POST',
-    body: formData
-  });
+  if (typeof XMLHttpRequest === 'undefined') {
+    const response = await fetch(`/api/session/${sessionId}/attachments`, {
+      method: 'POST',
+      body: formData
+    });
+    onProgress?.({
+      phase: 'processing',
+      loaded: totalFileBytes(files),
+      total: totalFileBytes(files),
+      percent: 100
+    });
 
-  return readJson<AttachmentResponse>(response);
+    return readJson<AttachmentResponse>(response);
+  }
+
+  return uploadAttachmentsWithProgress(sessionId, formData, files, onProgress);
+}
+
+function uploadAttachmentsWithProgress(
+  sessionId: string,
+  formData: FormData,
+  files: File[],
+  onProgress?: UploadProgressCallback
+): Promise<AttachmentResponse> {
+  const totalBytes = totalFileBytes(files);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let uploadCompleteReported = false;
+
+    function reportProgress(phase: WorkbenchUploadProgressUpdate['phase'], loaded: number, total: number) {
+      const safeTotal = total > 0 ? total : totalBytes;
+      const percent = safeTotal > 0
+        ? Math.min(100, Math.max(0, Math.round((loaded / safeTotal) * 100)))
+        : phase === 'processing'
+          ? 100
+          : 0;
+      onProgress?.({
+        phase,
+        loaded,
+        total: safeTotal,
+        percent
+      });
+    }
+
+    xhr.open('POST', `/api/session/${sessionId}/attachments`);
+    xhr.upload.onprogress = (event) => {
+      reportProgress(
+        'uploading',
+        event.loaded,
+        event.lengthComputable ? event.total : totalBytes
+      );
+    };
+    xhr.upload.onload = () => {
+      uploadCompleteReported = true;
+      reportProgress('processing', totalBytes, totalBytes);
+    };
+    xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
+    xhr.onload = () => {
+      if (!uploadCompleteReported) {
+        reportProgress('processing', totalBytes, totalBytes);
+      }
+
+      const payload = parseUploadResponse(xhr.responseText);
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(readUploadError(payload, xhr.statusText)));
+        return;
+      }
+
+      resolve(payload as AttachmentResponse);
+    };
+    xhr.send(formData);
+  });
+}
+
+function totalFileBytes(files: File[]): number {
+  return files.reduce((total, file) => total + file.size, 0);
+}
+
+function parseUploadResponse(responseText: string): unknown {
+  if (!responseText) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return {};
+  }
+}
+
+function readUploadError(payload: unknown, fallback: string): string {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'error' in payload &&
+    typeof (payload as { error?: unknown }).error === 'string'
+  ) {
+    return (payload as { error: string }).error;
+  }
+
+  return fallback || 'Upload failed. Check the file type and try again.';
 }
 
 export async function removeAttachment(sessionId: string, attachmentId: string): Promise<SnapshotResponse> {

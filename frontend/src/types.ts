@@ -47,6 +47,25 @@ export type WorkbenchAttachment = {
   uploadedAt: string;
 };
 
+export type WorkbenchUploadStage = 'uploading' | 'processing' | 'ready' | 'failed';
+
+export type WorkbenchUploadProgressUpdate = {
+  phase: 'uploading' | 'processing';
+  loaded: number;
+  total: number;
+  percent: number;
+};
+
+export type WorkbenchUploadItem = {
+  id: string;
+  name: string;
+  size: number;
+  stage: WorkbenchUploadStage;
+  progress: number | null;
+  message?: string;
+  error?: string;
+};
+
 export type WorkbenchMemoryEntry = {
   id: string;
   content: string;

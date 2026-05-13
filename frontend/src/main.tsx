@@ -13,6 +13,7 @@ function Root() {
       sessions={workbench.sessions}
       activeSessionId={workbench.activeSessionId}
       queuedAttachmentIds={workbench.queuedAttachmentIds}
+      uploadItems={workbench.uploadItems}
       health={workbench.health}
       onPromptSubmit={workbench.onPromptSubmit}
       onApprove={workbench.onApprove}
