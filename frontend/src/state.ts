@@ -165,6 +165,7 @@ type EngineEvent =
       type: 'turn.started';
       sessionId: string;
       prompt: string;
+      startedAt?: string;
     }
   | {
       type: 'turn.completed';
@@ -217,7 +218,11 @@ export function reduceEngineEvent(
     case 'turn.started':
       return {
         ...snapshot,
-        status: 'running'
+        status: 'running',
+        session: {
+          ...snapshot.session,
+          activeTurnStartedAt: event.startedAt ?? snapshot.session.activeTurnStartedAt
+        }
       };
     case 'message.user':
     case 'message.system':
@@ -513,7 +518,11 @@ export function reduceEngineEvent(
     case 'turn.completed':
       return {
         ...snapshot,
-        status: event.status === 'blocked' ? 'blocked' : 'completed'
+        status: event.status === 'blocked' ? 'blocked' : 'completed',
+        session: {
+          ...snapshot.session,
+          activeTurnStartedAt: undefined
+        }
       };
     case 'session.created':
       return {

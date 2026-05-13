@@ -117,6 +117,49 @@ describe('createEngine', () => {
     });
   });
 
+  it('exposes active turn start time while a provider turn is running', async () => {
+    let finishTurn!: () => void;
+    const turnGate = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        await turnGate;
+        yield {
+          type: 'assistant_delta',
+          text: 'Done'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const engine = createEngine({
+      provider,
+      executeTool: vi.fn<(...args: never[]) => Promise<EngineToolExecutionResult>>()
+    });
+    const session = engine.createSession({ cwd: process.cwd() });
+
+    const turn = engine.submitPrompt(session.id, 'Wait before answering');
+    const runningSnapshot = engine.getSnapshot(session.id);
+
+    expect(runningSnapshot.status).toBe('running');
+    expect(runningSnapshot.session.activeTurnStartedAt).toEqual(expect.any(String));
+    expect(Date.parse(runningSnapshot.session.activeTurnStartedAt!)).not.toBeNaN();
+
+    finishTurn();
+    await turn;
+
+    const completedSnapshot = engine.getSnapshot(session.id);
+    expect(completedSnapshot.status).toBe('completed');
+    expect(completedSnapshot.session.activeTurnStartedAt).toBeUndefined();
+  });
+
   it('emits a permission request and pauses before a mutating tool executes', async () => {
     const executeTool = vi.fn(async () => ({
       summary: 'README.md updated',

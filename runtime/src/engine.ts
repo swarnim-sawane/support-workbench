@@ -1167,6 +1167,13 @@ export function createEngine(input: {
   }
 
   function emit(state: SessionState, event: EngineEvent): void {
+    if (event.type === 'turn.started') {
+      state.session.status = 'running';
+      state.session.activeTurnStartedAt = event.startedAt;
+    }
+    if (event.type === 'turn.completed') {
+      state.session.activeTurnStartedAt = undefined;
+    }
     state.eventHistory.push(event);
     for (const listener of state.listeners) {
       listener(event);
@@ -1212,7 +1219,8 @@ export function createEngine(input: {
       },
       commands: [...COMMAND_CATALOG],
       session: {
-        branch: state.branch
+        branch: state.branch,
+        activeTurnStartedAt: state.session.activeTurnStartedAt
       },
       integrations
     };
@@ -2697,12 +2705,14 @@ export function createEngine(input: {
       const explicitReportRouting = buildExplicitReportSuggestion(prompt, turnAttachments, toolCatalog);
       const visiblePrompt = buildVisibleUserPrompt(prompt, turnAttachments);
       const userMessage = createMessage('user', visiblePrompt);
+      const startedAt = new Date().toISOString();
       state.messages.push(userMessage);
 
       emit(state, {
         type: 'turn.started',
         sessionId,
-        prompt
+        prompt,
+        startedAt
       });
       emit(state, {
         type: 'message.user',

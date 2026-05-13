@@ -75,6 +75,27 @@ describe('reduceEngineEvent', () => {
     ]);
   });
 
+  it('tracks and clears active turn start time from stream events', () => {
+    const started = reduceEngineEvent(EMPTY_SNAPSHOT, {
+      type: 'turn.started',
+      sessionId: 'session-1',
+      prompt: 'Analyze this log',
+      startedAt: '2026-04-24T00:00:00.000Z'
+    });
+
+    expect(started.status).toBe('running');
+    expect(started.session.activeTurnStartedAt).toBe('2026-04-24T00:00:00.000Z');
+
+    const completed = reduceEngineEvent(started, {
+      type: 'turn.completed',
+      sessionId: 'session-1',
+      status: 'completed'
+    });
+
+    expect(completed.status).toBe('completed');
+    expect(completed.session.activeTurnStartedAt).toBeUndefined();
+  });
+
   it('preserves leaked tool names and metadata in approvals and transcript messages', () => {
     const awaitingApproval = reduceEngineEvent(EMPTY_SNAPSHOT, {
       type: 'permission.requested',

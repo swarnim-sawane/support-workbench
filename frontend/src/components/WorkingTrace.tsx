@@ -46,7 +46,7 @@ export function WorkingTrace({
         <span className="working-loader" aria-hidden="true">
           {active ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
         </span>
-        <strong>{active ? `Working for ${elapsed}` : `Worked for ${elapsed}`}</strong>
+        <strong>{buildElapsedSummary(active, elapsed)}</strong>
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </summary>
       <div className="working-step-list">
@@ -141,30 +141,30 @@ function buildObservableSteps(
 }
 
 function firstStartedAt(snapshot: WorkbenchSessionSnapshot): string | undefined {
-  return snapshot.toolActivity.find((activity) => activity.status === 'running' && activity.startedAt)
-    ?.startedAt;
+  return (
+    snapshot.session.activeTurnStartedAt ??
+    snapshot.toolActivity.find((activity) => activity.status === 'running' && activity.startedAt)?.startedAt
+  );
 }
 
-function useElapsedLabel(active: boolean, startedAt?: string) {
-  const [localStartedAt, setLocalStartedAt] = useState(() => Date.now());
+function useElapsedLabel(active: boolean, startedAt?: string): string | null {
   const [now, setNow] = useState(() => Date.now());
+  const start = parseStableTime(startedAt);
 
   useEffect(() => {
-    if (active) {
-      setLocalStartedAt(Date.now());
-    }
-  }, [active]);
-
-  useEffect(() => {
-    if (!active) {
+    if (!active || start === null) {
       return undefined;
     }
 
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [active]);
+  }, [active, start]);
 
-  const start = startedAt ? Date.parse(startedAt) : localStartedAt;
+  if (!active || start === null) {
+    return null;
+  }
+
   const seconds = Math.max(0, Math.floor((now - start) / 1000));
 
   if (seconds < 60) {
@@ -174,4 +174,21 @@ function useElapsedLabel(active: boolean, startedAt?: string) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function parseStableTime(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildElapsedSummary(active: boolean, elapsed: string | null): string {
+  if (active) {
+    return elapsed ? `Working for ${elapsed}` : 'Working';
+  }
+
+  return elapsed ? `Worked for ${elapsed}` : 'Worked';
 }

@@ -324,6 +324,7 @@ export type EngineEvent =
       type: 'turn.started';
       sessionId: string;
       prompt: string;
+      startedAt: string;
     }
   | {
       type: 'message.user';
@@ -524,6 +525,7 @@ export type EngineSessionSnapshot = {
   commands: EngineCommandInfo[];
   session: {
     branch: string | null;
+    activeTurnStartedAt?: string;
   };
   integrations: EngineIntegrationSnapshot;
 };
@@ -532,6 +534,7 @@ export type EngineSession = {
   id: string;
   cwd: string;
   status: EngineSessionStatus;
+  activeTurnStartedAt?: string;
 };
 
 export type EngineSessionSummary = {
