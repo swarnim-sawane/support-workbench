@@ -4,6 +4,7 @@ import type {
   WorkbenchSessionSnapshot,
   WorkbenchToolActivity
 } from '../types';
+import { formatLogScanActivityTitle } from '../derivedSupportState';
 
 export function formatBytes(size: number): string {
   if (size < 1024) {
@@ -92,6 +93,8 @@ export function buildFriendlyToolActivityTitle(activity: WorkbenchToolActivity):
 
   const active = activity.status === 'running';
   switch (toolName) {
+    case 'LogScan':
+      return formatLogScanActivityTitle(activity);
     case 'Read':
     case 'read_file_text':
       return active
@@ -136,6 +139,7 @@ export function buildFriendlyToolActivityDetail(activity: WorkbenchToolActivity)
   }
 
   if (
+    activity.toolName === 'LogScan' ||
     activity.toolName === 'analyze_adf_logs' ||
     activity.toolName === 'analyze_access_logs' ||
     activity.toolName === 'read_logs' ||
@@ -159,6 +163,10 @@ export function buildFriendlyToolGroupTitle(activities: WorkbenchToolActivity[])
   const pending = activities.filter((activity) => activity.status === 'pending');
   if (pending.length) {
     return `Queued ${pending.length} ${pluralize(pending.length, 'tool')}`;
+  }
+
+  if (activities.length === 1 && activities[0].toolName === 'LogScan') {
+    return formatLogScanActivityTitle(activities[0]);
   }
 
   return `Ran ${activities.length} ${pluralize(activities.length, 'tool')}`;

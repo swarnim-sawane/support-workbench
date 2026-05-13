@@ -73,6 +73,7 @@ const AGENT_SETTLE_POLL_MS = 100;
 const LOG_SCAN_EVIDENCE_READ_LIMIT = 40;
 const LOG_SCAN_EVIDENCE_CONTEXT_RADIUS = 10;
 const MAX_LOG_SCAN_EVIDENCE_READS = 6;
+const LARGE_LOG_PRESCAN_MIN_BYTES = 1024 * 1024;
 const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'LogScan', 'WebFetch', 'WebSearch']);
 const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed', 'cancelled']);
 
@@ -533,7 +534,13 @@ function logAttachmentsForPreScan(attachments: EngineAttachment[]): EngineAttach
 }
 
 function shouldRunLogPreScan(prompt: string, attachments: EngineAttachment[]): boolean {
-  return logAttachmentsForPreScan(attachments).length > 1 && isLogAnalysisPrompt(prompt);
+  if (!isLogAnalysisPrompt(prompt)) {
+    return false;
+  }
+
+  const logAttachments = logAttachmentsForPreScan(attachments);
+  return logAttachments.length > 1 ||
+    logAttachments.some((attachment) => attachment.size >= LARGE_LOG_PRESCAN_MIN_BYTES);
 }
 
 function buildLogPreScanInput(attachments: EngineAttachment[]): Record<string, unknown> {
@@ -3442,18 +3449,39 @@ export function createEngine(input: {
       }
       persistState(state);
 
-      await maybeRunLogPreScan(state, prompt, turnAttachments);
+      try {
+        await maybeRunLogPreScan(state, prompt, turnAttachments);
 
-      await runTurnLoop(state, {
-        progressKey,
-        turnAttachments,
-        explicitReportRouting: explicitReportRouting.reportSuggestion?.canRun
-          ? {
-              skippedTool: explicitReportRouting.skippedTool,
-              reportSuggestion: explicitReportRouting.reportSuggestion
-            }
-          : null
-      });
+        await runTurnLoop(state, {
+          progressKey,
+          turnAttachments,
+          explicitReportRouting: explicitReportRouting.reportSuggestion?.canRun
+            ? {
+                skippedTool: explicitReportRouting.skippedTool,
+                reportSuggestion: explicitReportRouting.reportSuggestion
+              }
+            : null
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        completeRunningProgress(state, 'model.thinking');
+        completeRunningProgress(state, 'answer.preparing');
+        state.currentAssistantDraft = '';
+        state.session.status = 'blocked';
+        const systemMessage = pushSystemMessage(state, `Model request failed: ${message}`, 'command-error');
+        emit(state, {
+          type: 'message.system',
+          sessionId,
+          message: systemMessage
+        });
+        emit(state, {
+          type: 'turn.completed',
+          sessionId,
+          status: 'blocked'
+        });
+        persistState(state);
+        return;
+      }
 
       if (
         !explicitReportRouting.reportSuggestion &&

@@ -1,4 +1,10 @@
-import { ExternalLink, FileText, Info, X } from 'lucide-react';
+import { Activity, ExternalLink, FileSearch, FileText, Info, Layers3, ShieldAlert, X } from 'lucide-react';
+import {
+  deriveAttachmentGroups,
+  deriveEvidenceCoverage,
+  formatNumber,
+  type SupportEvidenceGroup
+} from '../derivedSupportState';
 import type { WorkbenchAttachment, WorkbenchSessionSnapshot } from '../types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import {
@@ -8,7 +14,7 @@ import {
   formatBytes
 } from './utils';
 
-export type WorkspaceTab = 'files' | 'reports';
+export type WorkspaceTab = 'case' | 'files' | 'reports';
 
 type WorkspaceSidebarProps = {
   snapshot: WorkbenchSessionSnapshot;
@@ -45,10 +51,18 @@ export function WorkspaceSidebar({
         className="workspace-tabs"
       >
         <TabsList className="workspace-tab-list">
+          <TabsTrigger value="case">Case</TabsTrigger>
           <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="case" className="workspace-tab-content">
+          <CaseTab
+            snapshot={snapshot}
+            attachments={availableAttachments}
+            queuedAttachmentIds={queuedAttachmentIds}
+          />
+        </TabsContent>
         <TabsContent value="files" className="workspace-tab-content">
           <FilesTab
             sessionId={snapshot.sessionId}
@@ -70,6 +84,160 @@ export function WorkspaceSidebar({
         </TabsContent>
       </Tabs>
     </aside>
+  );
+}
+
+function CaseTab({
+  snapshot,
+  attachments,
+  queuedAttachmentIds
+}: {
+  snapshot: WorkbenchSessionSnapshot;
+  attachments: WorkbenchAttachment[];
+  queuedAttachmentIds: string[];
+}) {
+  const groups = deriveAttachmentGroups(attachments, queuedAttachmentIds);
+  const coverage = deriveEvidenceCoverage(snapshot);
+  const logScan = coverage.logScan;
+
+  return (
+    <div className="case-ledger" aria-label="Case evidence ledger">
+      <section className="case-panel case-panel-hero">
+        <div className="case-section-head">
+          <span className="case-section-icon" aria-hidden="true">
+            <FileSearch size={17} />
+          </span>
+          <div>
+            <h2>Case evidence</h2>
+            <p>Frontend-inferred coverage from uploaded files and runtime evidence.</p>
+          </div>
+        </div>
+
+        <div className="case-metric-grid">
+          <span>
+            <strong>{formatNumber(groups.totalFiles)} uploaded</strong>
+            <small>workspace files</small>
+          </span>
+          <span>
+            <strong>{formatNumber(groups.queuedFiles)} queued</strong>
+            <small>selected for prompt</small>
+          </span>
+          <span>
+            <strong>{formatCount(snapshot.reports.artifacts.length, 'report')}</strong>
+            <small>generated artifacts</small>
+          </span>
+        </div>
+      </section>
+
+      {coverage.recovery ? (
+        <section className="case-panel case-recovery-panel">
+          <div className="case-section-head">
+            <span className="case-section-icon" aria-hidden="true">
+              <ShieldAlert size={17} />
+            </span>
+            <div>
+              <h3>Recovery in progress</h3>
+              <p>
+                {coverage.recovery.toolName} attempt {coverage.recovery.attempt}: {coverage.recovery.instruction}
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="case-panel">
+        <div className="case-section-head compact">
+          <span className="case-section-icon" aria-hidden="true">
+            <Activity size={17} />
+          </span>
+          <div>
+            <h3>Evidence coverage</h3>
+            <p>What the runtime has already scanned across the case.</p>
+          </div>
+        </div>
+
+        {logScan ? (
+          <>
+            <div className="case-metric-grid evidence">
+              <span>
+                <strong>Scanned {formatCount(logScan.scannedFiles, 'log')}</strong>
+                <small>full-file LogScan</small>
+              </span>
+              <span>
+                <strong>{formatNumber(logScan.scannedLines)} lines</strong>
+                <small>covered lines</small>
+              </span>
+              <span>
+                <strong>{formatCount(logScan.errors, 'error')}</strong>
+                <small>error signals</small>
+              </span>
+              <span>
+                <strong>{formatCount(logScan.warnings, 'warning')}</strong>
+                <small>warning signals</small>
+              </span>
+              <span>
+                <strong>{logScan.http5xx} HTTP 5xx</strong>
+                <small>server responses</small>
+              </span>
+              <span>
+                <strong>{formatCount(logScan.slowRequests, 'slow request')}</strong>
+                <small>latency evidence</small>
+              </span>
+              <span>
+                <strong>{formatCount(logScan.sharedIdentifierCount, 'shared identifier')}</strong>
+                <small>cross-file hints</small>
+              </span>
+            </div>
+            {logScan.examplesCapped ? (
+              <p className="case-note">Examples capped by LogScan to keep the case summary readable.</p>
+            ) : null}
+          </>
+        ) : (
+          <p className="case-note">No LogScan evidence yet. Upload logs and ask for a case analysis to build coverage.</p>
+        )}
+      </section>
+
+      <section className="case-panel">
+        <div className="case-section-head compact">
+          <span className="case-section-icon" aria-hidden="true">
+            <Layers3 size={17} />
+          </span>
+          <div>
+            <h3>Inferred file groups</h3>
+            <p>Inferred from filenames and archive paths. Unknowns stay visible.</p>
+          </div>
+        </div>
+        <CaseGroupList title="Type" groups={groups.typeGroups} />
+        <CaseGroupList title="Node" groups={groups.nodeGroups} />
+        <CaseGroupList title="Capture" groups={groups.captureGroups} />
+      </section>
+    </div>
+  );
+}
+
+function CaseGroupList({ title, groups }: { title: string; groups: SupportEvidenceGroup[] }) {
+  if (!groups.length) {
+    return null;
+  }
+
+  return (
+    <div className="case-group-block">
+      <h4>{title}</h4>
+      <ul>
+        {groups.map((group) => (
+          <li key={`${title}-${group.key}`} className={group.key.includes('unknown') ? 'is-unknown' : ''}>
+            <span>
+              <strong>{group.label}</strong>
+              <small>{group.examples.join(', ')}</small>
+            </span>
+            <em>
+              {formatCount(group.count, 'file')}
+              {group.queuedCount ? ` - ${group.queuedCount} queued` : ''}
+            </em>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -230,4 +398,8 @@ function EmptyPane({ title, hint }: { title: string; hint: string }) {
       <p>{hint}</p>
     </div>
   );
+}
+
+function formatCount(count: number, singular: string): string {
+  return `${formatNumber(count)} ${count === 1 ? singular : `${singular}s`}`;
 }
