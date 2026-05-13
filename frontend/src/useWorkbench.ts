@@ -11,7 +11,13 @@ import {
   uploadAttachments
 } from './api';
 import { reduceEngineEvent } from './state';
-import type { WorkbenchHealth, WorkbenchSessionSnapshot, WorkbenchSessionSummary } from './types';
+import type {
+  WorkbenchHealth,
+  WorkbenchSessionSnapshot,
+  WorkbenchSessionSummary,
+  WorkbenchUploadItem,
+  WorkbenchUploadProgressUpdate
+} from './types';
 
 const EMPTY_SNAPSHOT: WorkbenchSessionSnapshot = {
   sessionId: '',
@@ -75,6 +81,7 @@ export function useWorkbench() {
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queuedAttachmentIds, setQueuedAttachmentIds] = useState<string[]>([]);
+  const [uploadItems, setUploadItems] = useState<WorkbenchUploadItem[]>([]);
   const [sessions, setSessions] = useState<WorkbenchSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -153,6 +160,7 @@ export function useWorkbench() {
     sessions,
     activeSessionId,
     queuedAttachmentIds,
+    uploadItems,
     health,
     isBooting: isBooting || isSwitchingSession,
     error,
@@ -164,6 +172,7 @@ export function useWorkbench() {
         const response = await createSession({ cwd });
         setSnapshot(response.snapshot);
         setQueuedAttachmentIds([]);
+        setUploadItems([]);
         setActiveSessionId(response.session.id);
         connectSession(response.session.id);
         await refreshSessions(response.session.cwd);
@@ -184,6 +193,7 @@ export function useWorkbench() {
         const response = await createSession({ cwd, sessionId });
         setSnapshot(response.snapshot);
         setQueuedAttachmentIds([]);
+        setUploadItems([]);
         setActiveSessionId(response.session.id);
         connectSession(response.session.id);
         await refreshSessions(response.session.cwd);
@@ -206,6 +216,7 @@ export function useWorkbench() {
           const response = await createSession({ cwd });
           setSnapshot(response.snapshot);
           setQueuedAttachmentIds([]);
+          setUploadItems([]);
           setActiveSessionId(response.session.id);
           connectSession(response.session.id);
           await refreshSessions(response.session.cwd);
@@ -244,12 +255,29 @@ export function useWorkbench() {
         return;
       }
 
-      const response = await uploadAttachments(snapshot.sessionId, files);
-      setSnapshot(response.snapshot);
-      setQueuedAttachmentIds((current) =>
-        Array.from(new Set([...current, ...response.attachments.map((attachment) => attachment.id)]))
-      );
-      void refreshSessions(response.snapshot.workspace.cwd);
+      const uploadBatch = createUploadItems(files);
+      const uploadIds = new Set(uploadBatch.map((item) => item.id));
+      setError(null);
+      setUploadItems((current) => [
+        ...current.filter((item) => item.stage !== 'ready'),
+        ...uploadBatch
+      ]);
+
+      try {
+        const response = await uploadAttachments(snapshot.sessionId, files, (progress) => {
+          setUploadItems((current) => updateUploadProgress(current, uploadIds, progress));
+        });
+        setSnapshot(response.snapshot);
+        setQueuedAttachmentIds((current) =>
+          Array.from(new Set([...current, ...response.attachments.map((attachment) => attachment.id)]))
+        );
+        setUploadItems((current) => markUploadBatchReady(current, uploadIds));
+        void refreshSessions(response.snapshot.workspace.cwd);
+      } catch (uploadError) {
+        const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
+        setError(message);
+        setUploadItems((current) => markUploadBatchFailed(current, uploadIds, message));
+      }
     },
     async onRemoveAttachment(attachmentId: string) {
       if (!snapshot.sessionId) {
@@ -270,4 +298,88 @@ export function useWorkbench() {
       setQueuedAttachmentIds((current) => current.filter((id) => id !== attachmentId));
     }
   };
+}
+
+function createUploadItems(files: File[]): WorkbenchUploadItem[] {
+  const batchId = createUploadBatchId();
+  return files.map((file, index) => ({
+    id: `${batchId}-${index}`,
+    name: file.name || 'attachment',
+    size: file.size,
+    stage: 'uploading',
+    progress: 0,
+    message: 'Waiting to upload'
+  }));
+}
+
+function createUploadBatchId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `upload-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function updateUploadProgress(
+  items: WorkbenchUploadItem[],
+  uploadIds: Set<string>,
+  progress: WorkbenchUploadProgressUpdate
+): WorkbenchUploadItem[] {
+  const stage = progress.phase === 'processing' ? 'processing' : 'uploading';
+  const message = stage === 'processing'
+    ? 'Processing OCR and indexing'
+    : `Uploading ${progress.percent}%`;
+
+  return items.map((item) => {
+    if (!uploadIds.has(item.id)) {
+      return item;
+    }
+
+    return {
+      ...item,
+      stage,
+      progress: Math.max(item.progress ?? 0, progress.percent),
+      message,
+      error: undefined
+    };
+  });
+}
+
+function markUploadBatchReady(
+  items: WorkbenchUploadItem[],
+  uploadIds: Set<string>
+): WorkbenchUploadItem[] {
+  return items.map((item) => {
+    if (!uploadIds.has(item.id)) {
+      return item;
+    }
+
+    return {
+      ...item,
+      stage: 'ready',
+      progress: 100,
+      message: 'Ready for analysis',
+      error: undefined
+    };
+  });
+}
+
+function markUploadBatchFailed(
+  items: WorkbenchUploadItem[],
+  uploadIds: Set<string>,
+  error: string
+): WorkbenchUploadItem[] {
+  return items.map((item) => {
+    if (!uploadIds.has(item.id)) {
+      return item;
+    }
+
+    return {
+      ...item,
+      stage: 'failed',
+      progress: item.progress ?? 100,
+      message: 'Upload failed',
+      error
+    };
+  });
 }

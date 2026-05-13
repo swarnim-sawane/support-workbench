@@ -81,6 +81,94 @@ describe('useWorkbench', () => {
     expect(result.current.snapshot.sessionId).toBe('session-fresh');
     expect(result.current.queuedAttachmentIds).toEqual([]);
   });
+
+  it('tracks attachment uploads from uploading to processing to ready', async () => {
+    const activeSnapshot = buildSnapshot('session-active');
+    const uploadedAttachment = {
+      id: 'att-uploaded',
+      originalName: 'trace.log',
+      storedName: 'trace.log',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: 'C:/repo/.claude-oca/uploads/session-active/trace.log',
+      size: 1024,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-04-24T00:00:00.000Z'
+    } as const;
+    const snapshotWithAttachment: WorkbenchSessionSnapshot = {
+      ...activeSnapshot,
+      attachments: [uploadedAttachment]
+    };
+    let finishUpload!: () => void;
+
+    vi.mocked(api.createSession).mockResolvedValue({
+      session: {
+        id: 'session-active',
+        cwd: 'C:/repo',
+        status: 'idle'
+      },
+      snapshot: activeSnapshot
+    });
+    vi.mocked(api.uploadAttachments).mockImplementation(async (_sessionId, _files, onProgress) => {
+      onProgress?.({
+        phase: 'uploading',
+        loaded: 512,
+        total: 1024,
+        percent: 50
+      });
+      onProgress?.({
+        phase: 'processing',
+        loaded: 1024,
+        total: 1024,
+        percent: 100
+      });
+      await new Promise<void>((resolve) => {
+        finishUpload = resolve;
+      });
+      return {
+        attachments: [uploadedAttachment],
+        snapshot: snapshotWithAttachment
+      };
+    });
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.activeSessionId).toBe('session-active'));
+
+    const file = new File(['trace data'], 'trace.log', { type: 'text/plain' });
+    let attachPromise!: Promise<void>;
+    act(() => {
+      attachPromise = result.current.onAttachFiles([file]) as Promise<void>;
+    });
+
+    await waitFor(() =>
+      expect(result.current.uploadItems).toEqual([
+        expect.objectContaining({
+          name: 'trace.log',
+          stage: 'processing',
+          progress: 100,
+          message: 'Processing OCR and indexing'
+        })
+      ])
+    );
+
+    await act(async () => {
+      finishUpload();
+      await attachPromise;
+    });
+
+    expect(api.uploadAttachments).toHaveBeenCalledWith('session-active', [file], expect.any(Function));
+    expect(result.current.uploadItems).toEqual([
+      expect.objectContaining({
+        name: 'trace.log',
+        stage: 'ready',
+        progress: 100,
+        message: 'Ready for analysis'
+      })
+    ]);
+    expect(result.current.snapshot.attachments).toEqual([uploadedAttachment]);
+    expect(result.current.queuedAttachmentIds).toEqual(['att-uploaded']);
+  });
 });
 
 function buildSnapshot(sessionId: string): WorkbenchSessionSnapshot {
