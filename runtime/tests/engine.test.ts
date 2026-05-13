@@ -1052,6 +1052,112 @@ describe('createEngine', () => {
     );
   });
 
+  it('repairs analyze_access_logs folder input from uploaded access log attachments', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-access-log-input-'));
+    const sessionId = 'access-log-input-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const vm1Path = join(uploadDir, 'AVBCS-41519-vm1_access.log');
+    const vm2Path = join(uploadDir, 'AVBCS-41519-vm2_access.log');
+    const vbPath = join(uploadDir, 'AVBCS-41519-vb_access.log');
+    writeFileSync(vm1Path, 'GET /ords 500');
+    writeFileSync(vm2Path, 'GET /ords 200');
+    writeFileSync(vbPath, 'POST /ords 503');
+
+    let turnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'analyze_access_logs',
+            input: {
+              log_folder: 'undefined'
+            },
+            reasoning: 'Analyze all uploaded access logs together'
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Access log analysis completed.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const executeTool = vi.fn(async () => ({
+      summary: 'access log analysis complete',
+      source: 'jd-mcp' as const
+    }));
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_access_logs',
+          description: 'Analyze WebLogic or Oracle HTTP Server access logs.',
+          source: 'jd-mcp',
+          requiresApproval: false,
+          producesReports: true,
+          category: 'reports',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    for (const [index, localPath] of [vm1Path, vm2Path, vbPath].entries()) {
+      const originalName = localPath.split(/[\\/]/).at(-1)!;
+      engine.addAttachment(session.id, {
+        id: `att-access-${index + 1}`,
+        originalName,
+        storedName: originalName,
+        mediaType: 'text/plain',
+        kind: 'text',
+        localPath,
+        size: 16,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: '2026-04-24T00:00:00.000Z'
+      });
+    }
+
+    await engine.submitPrompt(session.id, 'analyze these access logs', {
+      attachmentIds: ['att-access-1', 'att-access-2', 'att-access-3']
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'analyze_access_logs',
+        input: {
+          log_folder: uploadDir
+        }
+      })
+    );
+    expect(engine.getSnapshot(session.id).toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'analyze_access_logs',
+          status: 'completed',
+          input: {
+            log_folder: uploadDir
+          }
+        })
+      ])
+    );
+  });
+
   it('prefers analyze_adf_logs for explicit analyzer requests with an attached diagnostic log', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-explicit-report-'));
     const sessionId = 'explicit-report-session';

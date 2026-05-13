@@ -14,6 +14,8 @@ import { JD_MCP_TOOL_DEFINITIONS } from './jdMcpToolDefinitions.js';
 
 const execFile = promisify(execFileCallback);
 
+const FOLDER_ANALYZER_TOOLS = new Set(['read_logs', 'analyze_adf_logs', 'analyze_access_logs']);
+
 type JdMcpWorkerResponse = {
   ok: boolean;
   status?: 'connected' | 'available' | 'unavailable';
@@ -181,6 +183,15 @@ function normalizeFolderPath(pathValue: string): string {
   return resolved;
 }
 
+function isMissingPathInput(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return true;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return !normalized || normalized === 'undefined' || normalized === 'null';
+}
+
 export function normalizeJdMcpToolInput(
   toolName: string,
   input: Record<string, unknown>
@@ -188,20 +199,12 @@ export function normalizeJdMcpToolInput(
   const next = { ...input };
   const legacyInput = typeof next.input === 'string' && next.input.trim() ? next.input : undefined;
 
-  if (toolName === 'read_logs') {
-    const logFolder = typeof next.log_folder === 'string' && next.log_folder.trim()
-      ? next.log_folder
-      : legacyInput;
-    if (logFolder) {
-      next.log_folder = normalizeFolderPath(logFolder);
-      delete next.input;
-    }
-  }
-
-  if (toolName === 'analyze_adf_logs') {
-    const logFolder = typeof next.log_folder === 'string' && next.log_folder.trim()
-      ? next.log_folder
-      : legacyInput;
+  if (FOLDER_ANALYZER_TOOLS.has(toolName)) {
+    const logFolder = !isMissingPathInput(next.log_folder)
+      ? String(next.log_folder).trim()
+      : !isMissingPathInput(legacyInput)
+        ? legacyInput
+        : undefined;
     if (logFolder) {
       next.log_folder = normalizeFolderPath(logFolder);
       delete next.input;
@@ -214,6 +217,28 @@ export function normalizeJdMcpToolInput(
   }
 
   return next;
+}
+
+function validateJdMcpToolInput(toolName: string, input: Record<string, unknown>): void {
+  if (!FOLDER_ANALYZER_TOOLS.has(toolName)) {
+    return;
+  }
+
+  const attempted =
+    typeof input.log_folder === 'string' && input.log_folder.trim()
+      ? input.log_folder.trim()
+      : '(missing)';
+  const resolved = typeof input.log_folder === 'string' ? resolve(input.log_folder) : null;
+  if (
+    isMissingPathInput(input.log_folder) ||
+    !resolved ||
+    !existsSync(resolved) ||
+    !statSync(resolved).isDirectory()
+  ) {
+    throw new Error(
+      `${toolName} requires log_folder to reference an existing folder. Attempted log_folder: ${attempted}`
+    );
+  }
 }
 
 function extractReportArtifacts(
@@ -391,11 +416,14 @@ export class JdMcpBridge {
       throw new Error(tool?.reason ?? `jd-mcp tool is unavailable: ${args.toolName}`);
     }
 
+    const normalizedInput = normalizeJdMcpToolInput(args.toolName, args.input);
+    validateJdMcpToolInput(args.toolName, normalizedInput);
+
     const response = await this.invoke({
       action: 'execute',
       root,
       toolName: args.toolName,
-      input: normalizeJdMcpToolInput(args.toolName, args.input)
+      input: normalizedInput
     });
     if (!response.ok) {
       throw new Error(response.note ?? `jd-mcp tool failed: ${args.toolName}`);

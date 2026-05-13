@@ -446,6 +446,15 @@ function isDiagnosticLikeTextAttachment(attachment: EngineAttachment): boolean {
   );
 }
 
+function isAccessLogAttachment(attachment: EngineAttachment): boolean {
+  if (attachment.kind !== 'text') {
+    return false;
+  }
+
+  const normalizedName = attachment.originalName.toLowerCase();
+  return normalizedName.includes('access') && /\.(log|txt|out)$/.test(normalizedName);
+}
+
 function findSingleDiagnosticAttachment(attachments: EngineAttachment[]): EngineAttachment | null {
   const activeAttachments = attachments.filter(
     (attachment) => attachment.promptVisibility === 'available'
@@ -456,6 +465,21 @@ function findSingleDiagnosticAttachment(attachments: EngineAttachment[]): Engine
 
   const [attachment] = activeAttachments;
   return attachment && isDiagnosticLikeTextAttachment(attachment) ? attachment : null;
+}
+
+function findAnalyzerFolderAttachment(
+  toolName: string,
+  attachments: EngineAttachment[]
+): EngineAttachment | null {
+  if (toolName === 'analyze_access_logs') {
+    const accessLogAttachments = attachments.filter(
+      (attachment) =>
+        attachment.promptVisibility === 'available' && isAccessLogAttachment(attachment)
+    );
+    return accessLogAttachments[0] ?? null;
+  }
+
+  return findSingleDiagnosticAttachment(attachments);
 }
 
 function isMissingPathValue(value: unknown): boolean {
@@ -489,7 +513,7 @@ function repairJdMcpInputFromAttachments(
   inputValue: Record<string, unknown>,
   turnAttachments: EngineAttachment[] = []
 ): Record<string, unknown> {
-  const attachment = findSingleDiagnosticAttachment(turnAttachments);
+  const attachment = findAnalyzerFolderAttachment(toolName, turnAttachments);
   if (!attachment) {
     return inputValue;
   }
@@ -510,7 +534,7 @@ function repairJdMcpInputFromAttachments(
     };
   }
 
-  if (toolName === 'analyze_adf_logs' || toolName === 'read_logs') {
+  if (toolName === 'analyze_adf_logs' || toolName === 'read_logs' || toolName === 'analyze_access_logs') {
     const logFolder = firstUsablePathValue(inputValue, ['log_folder', 'path', 'input_path', 'input']);
     return {
       ...inputValue,
