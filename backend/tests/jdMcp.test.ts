@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -161,13 +161,38 @@ describe('JdMcpBridge', () => {
     expect(normalizeJdMcpToolInput('analyze_adf_logs', { input: filePath })).toEqual({
       log_folder: root
     });
+    expect(normalizeJdMcpToolInput('analyze_access_logs', { input: filePath })).toEqual({
+      log_folder: root
+    });
     expect(normalizeJdMcpToolInput('triage_text_diagnostics', { input: filePath })).toEqual({
       input_path: filePath
     });
   });
 
+  it('rejects missing access log folders with the argument name and attempted path', async () => {
+    configureFakeJdMcpRoot();
+
+    const bridge = new JdMcpBridge();
+    const invoke = vi.fn();
+    (bridge as unknown as { invoke: typeof invoke }).invoke = invoke;
+
+    await expect(
+      bridge.executeTool({
+        toolName: 'analyze_access_logs',
+        input: {
+          log_folder: 'undefined'
+        },
+        sessionId: 'session-with-missing-access-folder'
+      })
+    ).rejects.toThrow(
+      'analyze_access_logs requires log_folder to reference an existing folder. Attempted log_folder: undefined'
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('treats non-zero jd-mcp payload exit codes as failed tool executions', async () => {
     configureFakeJdMcpRoot();
+    const logFolder = mkdtempSync(join(tmpdir(), 'claude-oca-jd-mcp-logs-'));
 
     const bridge = new JdMcpBridge();
     (bridge as unknown as {
@@ -193,7 +218,7 @@ describe('JdMcpBridge', () => {
       bridge.executeTool({
         toolName: 'analyze_adf_logs',
         input: {
-          log_folder: 'C:/logs'
+          log_folder: logFolder
         },
         cwd: process.cwd(),
         sessionId: 'session-with-bad-log'
