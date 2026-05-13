@@ -1624,6 +1624,184 @@ describe('createEngine', () => {
     );
   });
 
+  it('pre-scans a single large log attachment before asking the model to analyze it', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-large-log-prescan-'));
+    const accessPath = join(cwd, 'AVBCS-41519_vm1_access.log');
+    writeFileSync(accessPath, '2026-05-12T10:21:15Z "POST /resources/data HTTP/1.1" 500 912 23081\n');
+
+    let sendTurnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        sendTurnCount += 1;
+        yield {
+          type: 'assistant_delta',
+          text: 'Final answer after local LogScan evidence.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const executeTool = vi.fn(async ({ toolName }: { toolName: string }) => ({
+      summary:
+        toolName === 'LogScan'
+          ? 'LogScan scanned 1 file(s), 1 line(s); found 1 error(s), 0 severe event(s), 1 HTTP 5xx, and 1 slow request(s).'
+          : `Read focused evidence from ${toolName}`,
+      metadata:
+        toolName === 'LogScan'
+          ? {
+              scanned_entire_files: true,
+              total_files: 1,
+              scanned_files: 1,
+              totals: {
+                lines: 1,
+                error: 1,
+                http_5xx: 1,
+                slow_requests: 1
+              },
+              critical_examples: [
+                {
+                  file: accessPath,
+                  line: 1,
+                  kind: 'HTTP 500',
+                  content: 'POST /resources/data 500 23081',
+                  status: '500',
+                  duration_ms: 23081
+                }
+              ],
+              slow_requests: [
+                {
+                  file: accessPath,
+                  line: 1,
+                  kind: 'slow_request',
+                  content: 'POST /resources/data 500 23081',
+                  status: '500',
+                  duration_ms: 23081
+                }
+              ]
+            }
+          : {
+              content: 'focused evidence window'
+            }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd });
+    engine.addAttachment(session.id, {
+      id: 'att-access',
+      originalName: 'AVBCS-41519_vm1_access.log',
+      storedName: 'AVBCS-41519_vm1_access.log',
+      mediaType: 'application/octet-stream',
+      kind: 'text',
+      localPath: accessPath,
+      size: 9.4 * 1024 * 1024,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: new Date().toISOString()
+    });
+
+    await engine.submitPrompt(session.id, 'Analyse this', {
+      attachmentIds: ['att-access']
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'LogScan',
+        input: expect.objectContaining({
+          file_paths: [accessPath],
+          slow_ms_threshold: 5000
+        })
+      })
+    );
+    expect(sendTurnCount).toBe(1);
+    expect(engine.getSnapshot(session.id).toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'LogScan',
+          status: 'completed',
+          summary: expect.stringContaining('LogScan scanned 1 file')
+        })
+      ])
+    );
+  });
+
+  it('blocks the turn visibly when the model provider fails after local evidence work', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-provider-failure-'));
+    const accessPath = join(cwd, 'AVBCS-41519_vm1_access.log');
+    writeFileSync(accessPath, '2026-05-12T10:21:15Z "POST /resources/data HTTP/1.1" 500 912 23081\n');
+
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: false, provider: 'fake', model: 'fake-model', error: 'fetch failed' };
+      },
+      async *sendTurn() {
+        throw new Error('fetch failed');
+      },
+      async cancelTurn() {}
+    };
+
+    const executeTool = vi.fn(async () => ({
+      summary:
+        'LogScan scanned 1 file(s), 1 line(s); found 1 error(s), 0 severe event(s), 1 HTTP 5xx, and 1 slow request(s).',
+      metadata: {
+        scanned_entire_files: true,
+        scanned_files: 1,
+        totals: {
+          lines: 1,
+          error: 1,
+          http_5xx: 1,
+          slow_requests: 1
+        }
+      }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd });
+    engine.addAttachment(session.id, {
+      id: 'att-access',
+      originalName: 'AVBCS-41519_vm1_access.log',
+      storedName: 'AVBCS-41519_vm1_access.log',
+      mediaType: 'application/octet-stream',
+      kind: 'text',
+      localPath: accessPath,
+      size: 9.4 * 1024 * 1024,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: new Date().toISOString()
+    });
+
+    await expect(
+      engine.submitPrompt(session.id, 'Analyse this', {
+        attachmentIds: ['att-access']
+      })
+    ).resolves.toBeUndefined();
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(snapshot.status).toBe('blocked');
+    expect(snapshot.toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'LogScan',
+          status: 'completed'
+        })
+      ])
+    );
+    expect(snapshot.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          kind: 'command-error',
+          content: expect.stringContaining('Model request failed: fetch failed')
+        })
+      ])
+    );
+  });
+
   it('diversifies focused LogScan reads across distinct files and evidence types', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-log-diverse-'));
     const accessPath = join(cwd, 'vm1_access.log');

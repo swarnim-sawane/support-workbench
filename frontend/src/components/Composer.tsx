@@ -97,21 +97,35 @@ export function Composer({
     >
       {queuedAttachments.length ? (
         <div className="queued-attachments" aria-label="Queued attachments">
-          {queuedAttachments.map((attachment) => (
-            <button
-              key={attachment.id}
-              type="button"
-              className="attachment-chip"
-              aria-label={`Remove queued attachment ${attachment.originalName}`}
-              onClick={() => void onUnqueueAttachment(attachment.id)}
-            >
-              <span>{attachment.originalName}</span>
-              <small>
-                {formatBytes(attachment.size)} - {buildAttachmentStatus(attachment)}
-              </small>
-              <X size={13} aria-hidden="true" />
-            </button>
-          ))}
+          {queuedAttachments.length > 1 ? (
+            <details className="queued-case-summary">
+              <summary>
+                <span>
+                  <strong>{queuedAttachments.length} files queued as one case</strong>
+                  <small>
+                    {formatBytes(totalQueuedSize(queuedAttachments))} selected - details available
+                  </small>
+                </span>
+              </summary>
+              <div className="queued-case-list">
+                {queuedAttachments.map((attachment) => (
+                  <QueuedAttachmentChip
+                    key={attachment.id}
+                    attachment={attachment}
+                    onUnqueueAttachment={onUnqueueAttachment}
+                  />
+                ))}
+              </div>
+            </details>
+          ) : (
+            queuedAttachments.map((attachment) => (
+              <QueuedAttachmentChip
+                key={attachment.id}
+                attachment={attachment}
+                onUnqueueAttachment={onUnqueueAttachment}
+              />
+            ))
+          )}
         </div>
       ) : null}
 
@@ -160,4 +174,31 @@ export function Composer({
       </div>
     </form>
   );
+}
+
+function QueuedAttachmentChip({
+  attachment,
+  onUnqueueAttachment
+}: {
+  attachment: WorkbenchAttachment;
+  onUnqueueAttachment: (attachmentId: string) => void | Promise<void>;
+}) {
+  return (
+    <button
+      type="button"
+      className="attachment-chip"
+      aria-label={`Remove queued attachment ${attachment.originalName}`}
+      onClick={() => void onUnqueueAttachment(attachment.id)}
+    >
+      <span>{attachment.originalName}</span>
+      <small>
+        {formatBytes(attachment.size)} - {buildAttachmentStatus(attachment)}
+      </small>
+      <X size={13} aria-hidden="true" />
+    </button>
+  );
+}
+
+function totalQueuedSize(attachments: WorkbenchAttachment[]): number {
+  return attachments.reduce((total, attachment) => total + attachment.size, 0);
 }

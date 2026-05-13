@@ -12,6 +12,7 @@ type OcaProviderOptions = {
   model?: string;
   token?: string;
   fetchImpl?: typeof fetch;
+  requestTimeoutMs?: number;
 };
 
 type ParsedToolEnvelope = {
@@ -181,12 +182,14 @@ export class OcaModelProvider implements EngineModelProvider {
   private readonly model: string;
   private readonly token: string | undefined;
   private readonly fetchImpl: typeof fetch;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: OcaProviderOptions = {}) {
     this.baseUrl = options.baseUrl ?? process.env.OCA_BASE_URL;
     this.model = options.model ?? process.env.OCA_MODEL ?? 'oca/gpt-5.4';
     this.token = options.token ?? process.env.OCA_TOKEN;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? Number(process.env.OCA_REQUEST_TIMEOUT_MS ?? 60000);
   }
 
   async healthCheck(): Promise<EngineHealth> {
@@ -200,7 +203,7 @@ export class OcaModelProvider implements EngineModelProvider {
     }
 
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}/models`, {
+      const response = await this.fetchWithTimeout(`${this.baseUrl}/models`, {
         headers: {
           Authorization: `Bearer ${this.token}`
         }
@@ -214,7 +217,7 @@ export class OcaModelProvider implements EngineModelProvider {
         };
       }
 
-      const fallbackResponse = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      const fallbackResponse = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -275,7 +278,7 @@ export class OcaModelProvider implements EngineModelProvider {
       ...messages.map(toOpenAiMessage)
     ];
 
-    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+    const response = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -356,6 +359,25 @@ export class OcaModelProvider implements EngineModelProvider {
     yield {
       type: 'assistant_done'
     };
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
+    try {
+      return await this.fetchImpl(url, {
+        ...init,
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error(`OCA request timed out after ${this.requestTimeoutMs} ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async cancelTurn(_sessionId: string): Promise<void> {}

@@ -689,6 +689,184 @@ describe('App', () => {
     expect(screen.queryByText(/^Running Grep$/i)).not.toBeInTheDocument();
   });
 
+  it('renders a case evidence ledger with inferred log groups and LogScan coverage', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      attachments: [
+        buildTextAttachment('att-old-access', 'vm1_access_old.log'),
+        buildTextAttachment('att-new-access', 'vm1_access_new.log'),
+        buildTextAttachment('att-catalina', 'vm2_catalina_new.log'),
+        buildTextAttachment('att-readme', 'readme.txt')
+      ],
+      toolActivity: [
+        {
+          requestId: 'req-logscan',
+          toolUseId: 'tool-logscan',
+          toolName: 'LogScan',
+          source: 'builtin',
+          status: 'completed',
+          input: {
+            file_paths: ['vm1_access_old.log', 'vm2_catalina_new.log']
+          },
+          summary:
+            'LogScan scanned 2 file(s), 2103 line(s); found 17 error(s), 1 severe event(s), 2 HTTP 5xx, and 9 slow request(s).',
+          metadata: {
+            scanned_entire_files: true,
+            returned_examples_are_capped: true,
+            scanned_files: 2,
+            totals: {
+              lines: 2103,
+              error: 17,
+              warn: 42,
+              severe: 1,
+              http_5xx: 2,
+              slow_requests: 9
+            },
+            cross_file: {
+              shared_identifiers: [
+                {
+                  key: 'ECID',
+                  value: 'abc',
+                  count: 4,
+                  files: ['vm1_access_old.log', 'vm2_catalina_new.log']
+                }
+              ]
+            }
+          },
+          startedAt: '2026-04-24T00:00:00.000Z',
+          completedAt: '2026-04-24T00:00:01.000Z'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: ['att-new-access', 'att-catalina'],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    await user.click(screen.getByRole('tab', { name: /case/i }));
+
+    expect(screen.getByRole('heading', { name: /case evidence/i })).toBeInTheDocument();
+    expect(screen.getByText('4 uploaded')).toBeInTheDocument();
+    expect(screen.getByText('2 queued')).toBeInTheDocument();
+    expect(screen.getByText('1 report')).toBeInTheDocument();
+    expect(screen.getByText('Access logs')).toBeInTheDocument();
+    expect(screen.getByText('Catalina logs')).toBeInTheDocument();
+    expect(screen.getByText('Unclassified')).toBeInTheDocument();
+    expect(screen.getByText('vm1')).toBeInTheDocument();
+    expect(screen.getByText('vm2')).toBeInTheDocument();
+    expect(screen.getByText('Old capture')).toBeInTheDocument();
+    expect(screen.getByText('New capture')).toBeInTheDocument();
+    expect(screen.getByText('Scanned 2 logs')).toBeInTheDocument();
+    expect(screen.getByText('2,103 lines')).toBeInTheDocument();
+    expect(screen.getByText('17 errors')).toBeInTheDocument();
+    expect(screen.getByText('42 warnings')).toBeInTheDocument();
+    expect(screen.getByText('2 HTTP 5xx')).toBeInTheDocument();
+    expect(screen.getByText('9 slow requests')).toBeInTheDocument();
+    expect(screen.getByText('1 shared identifier')).toBeInTheDocument();
+    expect(screen.getByText(/examples capped/i)).toBeInTheDocument();
+    expect(screen.queryByText(/raw metadata/i)).not.toBeInTheDocument();
+  });
+
+  it('shows recoverable LogScan failures as case recovery state', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running',
+        messages: [
+          {
+            id: 'user-recovery',
+            role: 'user',
+            content: 'Analyze the uploaded logs'
+          }
+        ],
+        toolActivity: [
+          {
+            requestId: 'req-recovery',
+            toolUseId: 'tool-recovery',
+            toolName: 'LogScan',
+            source: 'builtin',
+            status: 'failed',
+            input: {
+              file_paths: ['vm1_access_old.log']
+            },
+            error: 'LogScan requires at least one matching file path or glob',
+            recoverable: true,
+            recoveryAttempt: 1,
+            recoveryInstruction: 'Retry with exact uploaded file paths.'
+          }
+        ]
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    await user.click(screen.getByRole('tab', { name: /case/i }));
+
+    expect(screen.getByText(/recovery in progress/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/logscan/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('Retry with exact uploaded file paths.')).toBeInTheDocument();
+    expect(screen.queryByText(/terminal failure/i)).not.toBeInTheDocument();
+  });
+
+  it('summarizes multi-file queued attachments without losing removal or submit behavior', async () => {
+    const user = userEvent.setup();
+    const onPromptSubmit = vi.fn();
+    const onUnqueueAttachment = vi.fn();
+    const noop = vi.fn();
+
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        attachments: [
+          buildTextAttachment('att-old-access', 'vm1_access_old.log'),
+          buildTextAttachment('att-new-access', 'vm1_access_new.log'),
+          buildTextAttachment('att-catalina', 'vm2_catalina_new.log')
+        ]
+      },
+      queuedAttachmentIds: ['att-old-access', 'att-new-access', 'att-catalina'],
+      onPromptSubmit,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment
+    });
+
+    expect(screen.getByText('3 files queued as one case')).toBeInTheDocument();
+
+    await user.click(screen.getByText('3 files queued as one case'));
+    await user.click(screen.getByRole('button', { name: /remove queued attachment vm2_catalina_new\.log/i }));
+    expect(onUnqueueAttachment).toHaveBeenCalledWith('att-catalina');
+
+    fireEvent.change(screen.getByPlaceholderText(/message support workbench/i), {
+      target: { value: 'Analyze queued logs as one case' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send prompt/i }));
+
+    expect(onPromptSubmit).toHaveBeenCalledWith('Analyze queued logs as one case', [
+      'att-old-access',
+      'att-new-access',
+      'att-catalina'
+    ]);
+  });
+
   it('shows unavailable analyzer fallback without offering /report', () => {
     const onApprove = vi.fn();
     const onPromptSubmit = vi.fn();
@@ -1311,6 +1489,21 @@ function renderWorkbench(input: RenderWorkbenchInput) {
       onDeleteSession={input.onDeleteSession}
     />
   );
+}
+
+function buildTextAttachment(id: string, originalName: string): WorkbenchSessionSnapshot['attachments'][number] {
+  return {
+    id,
+    originalName,
+    storedName: originalName,
+    mediaType: 'text/plain',
+    kind: 'text',
+    localPath: `C:/repo/.claude-oca/uploads/session-interactive/${originalName}`,
+    size: 128,
+    promptVisibility: 'available',
+    ocrStatus: 'unavailable',
+    uploadedAt: '2026-04-24T00:00:00.000Z'
+  };
 }
 
 function buildInteractiveSnapshot(): WorkbenchSessionSnapshot {
