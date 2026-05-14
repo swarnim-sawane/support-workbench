@@ -435,6 +435,45 @@ describe('App', () => {
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
 
+  it('keeps a new report suggestion visible when the session already has report artifacts', () => {
+    const noop = vi.fn();
+    const onPromptSubmit = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      reportSuggestion: {
+        available: true,
+        canRun: true,
+        suggestedToolName: 'analyze_adf_logs',
+        source: 'jd-mcp',
+        attachmentIds: ['att-1'],
+        input: {
+          log_folder: 'C:/repo/.claude-oca/uploads/session-interactive'
+        },
+        reasonCode: 'builtin_better_for_single_file',
+        explanation:
+          'This turn used direct file analysis because it gives a better answer for a single attached log. analyze_adf_logs expects a folder and can still be run if you want an HTML report.'
+      }
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: [],
+      onPromptSubmit,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(screen.getByText(/why no report\?/i)).toBeInTheDocument();
+    expect(screen.getByText(/better answer for a single attached log/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /run jd-mcp report anyway/i }));
+
+    expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-1']);
+  });
+
   it('labels explicit analyzer misses as direct-analysis fallback', () => {
     const onApprove = vi.fn();
     const onPromptSubmit = vi.fn();
