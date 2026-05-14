@@ -1,4 +1,14 @@
-import { Activity, ExternalLink, FileSearch, FileText, Info, Layers3, ShieldAlert, X } from 'lucide-react';
+import {
+  Activity,
+  ExternalLink,
+  FileSearch,
+  FileText,
+  Info,
+  Layers3,
+  PanelRightClose,
+  ShieldAlert,
+  X
+} from 'lucide-react';
 import {
   deriveAttachmentGroups,
   deriveEvidenceCoverage,
@@ -21,7 +31,9 @@ type WorkspaceSidebarProps = {
   availableAttachments: WorkbenchAttachment[];
   queuedAttachmentIds: string[];
   activeTab: WorkspaceTab;
+  workspaceCount: number;
   onTabChange: (tab: WorkspaceTab) => void;
+  onCloseWorkspace: () => void;
   reportSuggestion: WorkbenchSessionSnapshot['reportSuggestion'];
   onOpenReport: (reportId: string) => void;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
@@ -35,7 +47,9 @@ export function WorkspaceSidebar({
   availableAttachments,
   queuedAttachmentIds,
   activeTab,
+  workspaceCount,
   onTabChange,
+  onCloseWorkspace,
   reportSuggestion,
   onOpenReport,
   onPromptSubmit,
@@ -45,6 +59,23 @@ export function WorkspaceSidebar({
 }: WorkspaceSidebarProps) {
   return (
     <aside className="workspace-sidebar" aria-label="Workspace">
+      <div className="workspace-sidebar-head">
+        <div className="workspace-sidebar-title">
+          <PanelRightClose size={16} aria-hidden="true" />
+          <span>Workspace</span>
+          {workspaceCount > 0 ? <em className="workspace-count">{workspaceCount}</em> : null}
+        </div>
+        <button
+          type="button"
+          className="workspace-toggle-button"
+          aria-label="Close workspace"
+          title="Close workspace"
+          onClick={onCloseWorkspace}
+        >
+          <PanelRightClose size={16} aria-hidden="true" />
+          <span>Close workspace</span>
+        </button>
+      </div>
       <Tabs
         value={activeTab}
         onValueChange={(value) => onTabChange(value as WorkspaceTab)}

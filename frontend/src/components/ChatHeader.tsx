@@ -5,7 +5,6 @@ import {
   Download,
   HelpCircle,
   MoreHorizontal,
-  PanelRight,
   Sparkles,
   SwatchBook
 } from 'lucide-react';
@@ -17,11 +16,8 @@ export type WorkbenchTheme = 'light' | 'dark' | 'redwood';
 type ChatHeaderProps = {
   health: WorkbenchHealth;
   error?: string | null;
-  workspaceOpen: boolean;
-  workspaceCount: number;
   theme: WorkbenchTheme;
   isDocumentationOpen: boolean;
-  onToggleWorkspace: () => void;
   onDownloadChat: () => void;
   onSetTheme: (theme: WorkbenchTheme) => void;
   onOpenHelp: () => void;
@@ -32,11 +28,8 @@ type ChatHeaderProps = {
 export function ChatHeader({
   health,
   error,
-  workspaceOpen,
-  workspaceCount,
   theme,
   isDocumentationOpen,
-  onToggleWorkspace,
   onDownloadChat,
   onSetTheme,
   onOpenHelp,
@@ -109,18 +102,7 @@ export function ChatHeader({
             <BookOpenText size={15} />
             <span>Back to Workbench</span>
           </button>
-        ) : (
-          <button
-            type="button"
-            className={`header-action ${workspaceOpen ? 'is-active' : ''}`}
-            aria-label={workspaceOpen ? 'Hide workspace' : 'Show workspace'}
-            onClick={onToggleWorkspace}
-          >
-            <PanelRight size={15} />
-            <span>Workspace</span>
-            {workspaceCount > 0 ? <em className="header-count">{workspaceCount}</em> : null}
-          </button>
-        )}
+        ) : null}
         <div className="header-menu-wrap" ref={menuRef}>
           <button
             type="button"

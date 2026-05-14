@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, type DragEvent } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle, PanelRightOpen, X } from 'lucide-react';
 import { AppRail } from './components/AppRail';
 import { ApprovalOverlay } from './components/ApprovalOverlay';
 import { ChatHeader, type WorkbenchTheme } from './components/ChatHeader';
@@ -366,11 +366,8 @@ export function App({
         <ChatHeader
           health={health}
           error={error}
-          workspaceOpen={workspaceOpen}
-          workspaceCount={availableAttachments.length + snapshot.reports.artifacts.length}
           theme={theme}
           isDocumentationOpen={documentationOpen}
-          onToggleWorkspace={() => setWorkspaceOpen((current) => !current)}
           onDownloadChat={downloadChat}
           onSetTheme={setTheme}
           onOpenHelp={() => setHelpOpen(true)}
@@ -435,7 +432,9 @@ export function App({
                 availableAttachments={availableAttachments}
                 queuedAttachmentIds={queuedAttachmentIds}
                 activeTab={workspaceTab}
+                workspaceCount={availableAttachments.length + snapshot.reports.artifacts.length}
                 onTabChange={setWorkspaceTab}
+                onCloseWorkspace={() => setWorkspaceOpen(false)}
                 reportSuggestion={reportSuggestion}
                 onOpenReport={openReport}
                 onPromptSubmit={handlePromptSubmit}
@@ -443,7 +442,18 @@ export function App({
                 onUnqueueAttachment={onUnqueueAttachment}
                 onRemoveAttachment={onRemoveAttachment}
               />
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                className="workspace-reopen-button"
+                aria-label="Open workspace"
+                title="Open workspace"
+                onClick={() => setWorkspaceOpen(true)}
+              >
+                <PanelRightOpen size={16} aria-hidden="true" />
+                <span>Open workspace</span>
+              </button>
+            )}
           </main>
         )}
       </div>
