@@ -1,8 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import type { EngineApprovalResolution, WorkbenchEngine } from '@claude-oca/runtime';
 import { deleteAttachmentFile, ingestAttachments, readMultipartFiles } from './attachments.js';
 import { extractImageTextLocal, type ImageOcrResult } from './ocr.js';
+
+const CLIENT_ID_COOKIE = 'support_workbench_client_id';
+const CLIENT_ID_COOKIE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 
 function writeSse(res: Response, event: unknown): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -11,6 +15,73 @@ function writeSse(res: Response, event: unknown): void {
 function wantsLiveSse(req: Request): boolean {
   const accept = req.headers.accept ?? '';
   return accept.includes('text/event-stream');
+}
+
+function isSharedSessionMode(): boolean {
+  return process.env.SUPPORT_WORKBENCH_SESSION_MODE?.trim().toLowerCase() === 'shared';
+}
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!header) {
+    return cookies;
+  }
+
+  for (const item of header.split(';')) {
+    const separatorIndex = item.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const name = item.slice(0, separatorIndex).trim();
+    const value = item.slice(separatorIndex + 1).trim();
+    if (name) {
+      try {
+        cookies[name] = decodeURIComponent(value);
+      } catch {
+        cookies[name] = value;
+      }
+    }
+  }
+
+  return cookies;
+}
+
+function isValidClientId(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{20,80}$/.test(value);
+}
+
+function requestIsSecure(req: Request): boolean {
+  return req.secure || req.headers['x-forwarded-proto'] === 'https';
+}
+
+function sessionOwnerId(req: Request, res: Response): string | undefined {
+  if (isSharedSessionMode()) {
+    return undefined;
+  }
+
+  const existingClientId = parseCookieHeader(req.headers.cookie)[CLIENT_ID_COOKIE];
+  if (isValidClientId(existingClientId)) {
+    return existingClientId;
+  }
+
+  const clientId = randomUUID();
+  res.cookie(CLIENT_ID_COOKIE, clientId, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: requestIsSecure(req),
+    maxAge: CLIENT_ID_COOKIE_MAX_AGE_MS,
+    path: '/'
+  });
+  return clientId;
+}
+
+function publicSession(session: { id: string; cwd: string; status: string }) {
+  return {
+    id: session.id,
+    cwd: session.cwd,
+    status: session.status
+  };
 }
 
 export function createWorkbenchApp(input: {
@@ -26,34 +97,38 @@ export function createWorkbenchApp(input: {
   app.post('/api/session', (req, res) => {
     const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : process.cwd();
     const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
-    const session = input.engine.createSession({ cwd, sessionId });
+    const ownerId = sessionOwnerId(req, res);
+    const session = input.engine.createSession({ cwd, sessionId, ownerId });
 
     res.status(201).json({
-      session,
-      snapshot: input.engine.getSnapshot(session.id)
+      session: publicSession(session),
+      snapshot: input.engine.getSnapshot(session.id, ownerId)
     });
   });
 
   app.get('/api/sessions', (req, res) => {
+    const ownerId = sessionOwnerId(req, res);
     const cwd = typeof req.query.cwd === 'string' && req.query.cwd.trim()
       ? req.query.cwd
       : process.cwd();
     res.json({
-      sessions: input.engine.listSessions(cwd)
+      sessions: input.engine.listSessions(cwd, ownerId)
     });
   });
 
   app.get('/api/session/:sessionId', (req, res) => {
+    const ownerId = sessionOwnerId(req, res);
     res.json({
-      snapshot: input.engine.getSnapshot(req.params.sessionId)
+      snapshot: input.engine.getSnapshot(req.params.sessionId, ownerId)
     });
   });
 
   app.delete('/api/session/:sessionId', (req, res) => {
+    const ownerId = sessionOwnerId(req, res);
     const cwd = typeof req.query.cwd === 'string' && req.query.cwd.trim()
       ? req.query.cwd
       : process.cwd();
-    const deleted = input.engine.deleteSession(req.params.sessionId, cwd);
+    const deleted = input.engine.deleteSession(req.params.sessionId, cwd, ownerId);
     if (!deleted) {
       res.status(404).json({ error: 'Session not found' });
       return;
@@ -69,17 +144,19 @@ export function createWorkbenchApp(input: {
   });
 
   app.get('/api/session/:sessionId/history', (req, res) => {
+    const ownerId = sessionOwnerId(req, res);
     res.json({
       history: {
-        summaries: input.engine.getHistory(req.params.sessionId)
+        summaries: input.engine.getHistory(req.params.sessionId, ownerId)
       }
     });
   });
 
   app.get('/api/session/:sessionId/diff', (req, res) => {
+    const ownerId = sessionOwnerId(req, res);
     res.json({
       workspace: {
-        diffs: input.engine.getWorkspaceDiff(req.params.sessionId)
+        diffs: input.engine.getWorkspaceDiff(req.params.sessionId, ownerId)
       }
     });
   });
@@ -87,7 +164,8 @@ export function createWorkbenchApp(input: {
   app.post('/api/session/:sessionId/attachments', async (req, res, next) => {
     try {
       const sessionId = req.params.sessionId;
-      const snapshot = input.engine.getSnapshot(sessionId);
+      const ownerId = sessionOwnerId(req, res);
+      const snapshot = input.engine.getSnapshot(sessionId, ownerId);
       const files = await readMultipartFiles(req);
       const attachments = await ingestAttachments({
         cwd: snapshot.workspace.cwd,
@@ -95,13 +173,13 @@ export function createWorkbenchApp(input: {
         files,
         extractImageText
       });
-      const registered = attachments.map((attachment) => input.engine.addAttachment(sessionId, attachment));
-      input.engine.recordAttachmentUpload(sessionId, registered.map((attachment) => attachment.id));
+      const registered = attachments.map((attachment) => input.engine.addAttachment(sessionId, attachment, ownerId));
+      input.engine.recordAttachmentUpload(sessionId, registered.map((attachment) => attachment.id), ownerId);
 
       res.status(201).json({
         accepted: true,
         attachments: registered,
-        snapshot: input.engine.getSnapshot(sessionId)
+        snapshot: input.engine.getSnapshot(sessionId, ownerId)
       });
     } catch (error) {
       next(error);
@@ -110,9 +188,11 @@ export function createWorkbenchApp(input: {
 
   app.delete('/api/session/:sessionId/attachments/:attachmentId', async (req, res, next) => {
     try {
+      const ownerId = sessionOwnerId(req, res);
       const attachment = input.engine.getAttachment(
         req.params.sessionId,
-        req.params.attachmentId
+        req.params.attachmentId,
+        ownerId
       );
       if (!attachment) {
         res.status(404).json({ error: 'Attachment not found' });
@@ -120,11 +200,11 @@ export function createWorkbenchApp(input: {
       }
 
       await deleteAttachmentFile(attachment);
-      input.engine.removeAttachment(req.params.sessionId, req.params.attachmentId);
+      input.engine.removeAttachment(req.params.sessionId, req.params.attachmentId, ownerId);
 
       res.json({
         accepted: true,
-        snapshot: input.engine.getSnapshot(req.params.sessionId)
+        snapshot: input.engine.getSnapshot(req.params.sessionId, ownerId)
       });
     } catch (error) {
       next(error);
@@ -133,9 +213,11 @@ export function createWorkbenchApp(input: {
 
   app.get('/api/session/:sessionId/attachments/:attachmentId/content', (req, res, next) => {
     try {
+      const ownerId = sessionOwnerId(req, res);
       const attachment = input.engine.getAttachment(
         req.params.sessionId,
-        req.params.attachmentId
+        req.params.attachmentId,
+        ownerId
       );
       if (!attachment || attachment.promptVisibility !== 'available') {
         res.status(404).json({ error: 'Attachment not found' });
@@ -143,7 +225,7 @@ export function createWorkbenchApp(input: {
       }
 
       res.type(attachment.mediaType);
-      res.sendFile(attachment.localPath);
+      res.sendFile(attachment.localPath, { dotfiles: 'allow' });
     } catch (error) {
       next(error);
     }
@@ -151,7 +233,8 @@ export function createWorkbenchApp(input: {
 
   app.get('/api/session/:sessionId/reports/:reportId/content', (req, res, next) => {
     try {
-      const artifact = input.engine.getReportArtifact(req.params.sessionId, req.params.reportId);
+      const ownerId = sessionOwnerId(req, res);
+      const artifact = input.engine.getReportArtifact(req.params.sessionId, req.params.reportId, ownerId);
       if (!artifact) {
         res.status(404).json({ error: 'Report artifact not found' });
         return;
@@ -166,6 +249,7 @@ export function createWorkbenchApp(input: {
 
   app.post('/api/session/:sessionId/prompt', async (req, res, next) => {
     try {
+      const ownerId = sessionOwnerId(req, res);
       const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : '';
       const attachmentIds = Array.isArray(req.body?.attachmentIds)
         ? req.body.attachmentIds.filter((value: unknown): value is string => typeof value === 'string')
@@ -175,10 +259,10 @@ export function createWorkbenchApp(input: {
         return;
       }
 
-      await input.engine.submitPrompt(req.params.sessionId, prompt, { attachmentIds });
+      await input.engine.submitPrompt(req.params.sessionId, prompt, { attachmentIds, ownerId });
       res.status(202).json({
         accepted: true,
-        snapshot: input.engine.getSnapshot(req.params.sessionId)
+        snapshot: input.engine.getSnapshot(req.params.sessionId, ownerId)
       });
     } catch (error) {
       next(error);
@@ -188,12 +272,13 @@ export function createWorkbenchApp(input: {
   app.get('/api/session/:sessionId/stream', (req, res, next) => {
     try {
       const sessionId = req.params.sessionId;
+      const ownerId = sessionOwnerId(req, res);
+      const history = input.engine.getEventHistory(sessionId, ownerId);
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
       if (!wantsLiveSse(req)) {
-        const history = input.engine.getEventHistory(sessionId);
         for (const event of history) {
           writeSse(res, event);
         }
@@ -203,7 +288,7 @@ export function createWorkbenchApp(input: {
 
       const unsubscribe = input.engine.subscribe(sessionId, (event) => {
         writeSse(res, event);
-      });
+      }, ownerId);
 
       req.on('close', () => {
         unsubscribe();
@@ -216,11 +301,12 @@ export function createWorkbenchApp(input: {
 
   app.post('/api/session/:sessionId/approvals/:requestId', async (req, res, next) => {
     try {
+      const ownerId = sessionOwnerId(req, res);
       const body = req.body as EngineApprovalResolution;
-      await input.engine.resolveApproval(req.params.sessionId, req.params.requestId, body);
+      await input.engine.resolveApproval(req.params.sessionId, req.params.requestId, body, ownerId);
       res.status(202).json({
         accepted: true,
-        snapshot: input.engine.getSnapshot(req.params.sessionId)
+        snapshot: input.engine.getSnapshot(req.params.sessionId, ownerId)
       });
     } catch (error) {
       next(error);
@@ -259,11 +345,15 @@ export function createWorkbenchApp(input: {
   app.use((error: unknown, _req: Request, res: Response, _next: express.NextFunction) => {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode =
-      message.includes('Unsupported attachment type') ||
-      message.includes('At least one attachment') ||
-      message.includes('ZIP')
-        ? 400
-        : 500;
+      message.includes('Unknown session')
+        ? 404
+        : message.includes('Invalid session id')
+          ? 400
+        : message.includes('Unsupported attachment type') ||
+            message.includes('At least one attachment') ||
+            message.includes('ZIP')
+          ? 400
+          : 500;
     res.status(statusCode).json({ error: message });
   });
 

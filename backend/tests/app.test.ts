@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEngine } from '@claude-oca/runtime';
 import type {
   EngineModelEvent,
@@ -18,6 +18,14 @@ const PNG_IMAGE = Buffer.from(
 );
 
 describe('createWorkbenchApp', () => {
+  beforeEach(() => {
+    vi.stubEnv('SUPPORT_WORKBENCH_SESSION_MODE', 'isolated');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('creates a session and streams session events over SSE', async () => {
     const provider: EngineModelProvider = {
       async healthCheck() {
@@ -40,15 +48,16 @@ describe('createWorkbenchApp', () => {
       executeTool: vi.fn<(...args: never[]) => Promise<EngineToolExecutionResult>>()
     });
     const app = createWorkbenchApp({ engine });
-    const sessionResponse = await request(app).post('/api/session').send({ cwd: process.cwd() });
+    const client = request.agent(app);
+    const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
     expect(sessionResponse.status).toBe(201);
 
     const sessionId = sessionResponse.body.session.id as string;
-    const sseResponse = await request(app).get(`/api/session/${sessionId}/stream`).buffer(true);
+    const sseResponse = await client.get(`/api/session/${sessionId}/stream`).buffer(true);
     expect(sseResponse.status).toBe(200);
     expect(sseResponse.text).toContain('session.created');
 
-    const promptResponse = await request(app)
+    const promptResponse = await client
       .post(`/api/session/${sessionId}/prompt`)
       .send({ prompt: 'hello' });
 
@@ -89,15 +98,16 @@ describe('createWorkbenchApp', () => {
     };
     const engine = createEngine({ provider, executeTool });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd: process.cwd() });
+    const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
     const sessionId = sessionResponse.body.session.id as string;
-    await request(app).post(`/api/session/${sessionId}/prompt`).send({ prompt: 'edit the file' });
+    await client.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'edit the file' });
 
     const approval = engine.getPendingApprovals(sessionId)[0];
     expect(approval).toBeDefined();
 
-    const approvalResponse = await request(app)
+    const approvalResponse = await client
       .post(`/api/session/${sessionId}/approvals/${approval!.requestId}`)
       .send({ decision: 'allow' });
 
@@ -150,8 +160,9 @@ describe('createWorkbenchApp', () => {
 
     const engine = createEngine({ provider });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd: process.cwd() });
+    const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
     const sessionId = sessionResponse.body.session.id as string;
 
     const commandsResponse = await request(app).get('/api/commands');
@@ -160,14 +171,14 @@ describe('createWorkbenchApp', () => {
       expect.arrayContaining([expect.objectContaining({ name: '/tasks' })])
     );
 
-    await request(app).post(`/api/session/${sessionId}/prompt`).send({ prompt: 'hello' });
-    await request(app).post(`/api/session/${sessionId}/prompt`).send({ prompt: '/compact' });
+    await client.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'hello' });
+    await client.post(`/api/session/${sessionId}/prompt`).send({ prompt: '/compact' });
 
-    const historyResponse = await request(app).get(`/api/session/${sessionId}/history`);
+    const historyResponse = await client.get(`/api/session/${sessionId}/history`);
     expect(historyResponse.status).toBe(200);
     expect(historyResponse.body.history.summaries).toHaveLength(1);
 
-    const sessionsResponse = await request(app).get('/api/sessions').query({ cwd: process.cwd() });
+    const sessionsResponse = await client.get('/api/sessions').query({ cwd: process.cwd() });
     expect(sessionsResponse.status).toBe(200);
     expect(sessionsResponse.body.sessions).toEqual(
       expect.arrayContaining([
@@ -200,22 +211,106 @@ describe('createWorkbenchApp', () => {
 
     const engine = createEngine({ provider });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
-    await request(app).post(`/api/session/${sessionId}/prompt`).send({ prompt: 'hello' });
+    await client.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'hello' });
 
-    const deleteResponse = await request(app).delete(`/api/session/${sessionId}`).query({ cwd });
+    const deleteResponse = await client.delete(`/api/session/${sessionId}`).query({ cwd });
     expect(deleteResponse.status).toBe(200);
     expect(deleteResponse.body).toEqual({ accepted: true });
 
-    const sessionsResponse = await request(app).get('/api/sessions').query({ cwd });
+    const sessionsResponse = await client.get('/api/sessions').query({ cwd });
     expect(sessionsResponse.body.sessions).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: sessionId })])
     );
 
-    const unknownResponse = await request(app).delete('/api/session/missing-session').query({ cwd });
+    const unknownResponse = await client.delete('/api/session/missing-session').query({ cwd });
     expect(unknownResponse.status).toBe(404);
+  });
+
+  it('rejects unsafe client-supplied session ids before persistence access', async () => {
+    const engine = createEngine({
+      provider: {
+        async healthCheck() {
+          return { ok: true, provider: 'fake', model: 'fake-model' };
+        },
+        async *sendTurn() {
+          return;
+        },
+        async cancelTurn() {}
+      }
+    });
+    const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
+
+    const response = await client.post('/api/session').send({
+      cwd: process.cwd(),
+      sessionId: '../outside-workspace'
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid session id');
+  });
+
+  it('isolates session list, read, prompt, stream, attachment, and delete APIs by browser owner', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-browser-isolation-'));
+    const app = createWorkbenchApp({
+      engine: createEngine({
+        provider: {
+          async healthCheck() {
+            return { ok: true, provider: 'fake', model: 'fake-model' };
+          },
+          async *sendTurn() {
+            yield {
+              type: 'assistant_delta',
+              text: 'private answer'
+            } satisfies EngineModelEvent;
+            yield {
+              type: 'assistant_done'
+            } satisfies EngineModelEvent;
+          },
+          async cancelTurn() {}
+        }
+      })
+    });
+    const ownerA = request.agent(app);
+    const ownerB = request.agent(app);
+
+    const sessionResponse = await ownerA.post('/api/session').send({ cwd });
+    expect(sessionResponse.status).toBe(201);
+    const sessionId = sessionResponse.body.session.id as string;
+
+    await ownerA.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'owner A private prompt' });
+    const uploadResponse = await ownerA
+      .post(`/api/session/${sessionId}/attachments`)
+      .attach('files', Buffer.from('SECRET=owner-a'), {
+        filename: 'private.env',
+        contentType: 'text/plain'
+      });
+    expect(uploadResponse.status).toBe(201);
+    const attachmentId = uploadResponse.body.attachments[0].id as string;
+
+    const ownerAList = await ownerA.get('/api/sessions').query({ cwd });
+    expect(ownerAList.body.sessions.map((session: { id: string }) => session.id)).toContain(sessionId);
+
+    const ownerBList = await ownerB.get('/api/sessions').query({ cwd });
+    expect(ownerBList.status).toBe(200);
+    expect(ownerBList.body.sessions).toEqual([]);
+
+    await expect(ownerB.get(`/api/session/${sessionId}`)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.get(`/api/session/${sessionId}/history`)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.get(`/api/session/${sessionId}/diff`)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.get(`/api/session/${sessionId}/stream`).buffer(true)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'cross-user prompt' })).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.get(`/api/session/${sessionId}/attachments/${attachmentId}/content`)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.delete(`/api/session/${sessionId}/attachments/${attachmentId}`)).resolves.toMatchObject({ status: 404 });
+    await expect(ownerB.delete(`/api/session/${sessionId}`).query({ cwd })).resolves.toMatchObject({ status: 404 });
+
+    const ownerAContent = await ownerA.get(`/api/session/${sessionId}/attachments/${attachmentId}/content`);
+    expect(ownerAContent.status).toBe(200);
+    expect(ownerAContent.text).toContain('SECRET=owner-a');
   });
 
   it('uploads attachments into a session and includes selected attachment ids in a prompt turn', async () => {
@@ -246,11 +341,12 @@ describe('createWorkbenchApp', () => {
         text: 'HTTP 500 on localhost:4317'
       }))
     });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
 
-    const uploadResponse = await request(app)
+    const uploadResponse = await client
       .post(`/api/session/${sessionId}/attachments`)
       .attach('files', Buffer.from('PORT=4317'), {
         filename: 'runtime.env',
@@ -276,7 +372,7 @@ describe('createWorkbenchApp', () => {
     );
 
     const attachmentIds = uploadResponse.body.attachments.map((attachment: { id: string }) => attachment.id);
-    const promptResponse = await request(app)
+    const promptResponse = await client
       .post(`/api/session/${sessionId}/prompt`)
       .send({ prompt: 'inspect the attachments', attachmentIds });
 
@@ -305,11 +401,12 @@ describe('createWorkbenchApp', () => {
         throw new Error('Windows OCR engine unavailable.');
       })
     });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
 
-    const uploadResponse = await request(app)
+    const uploadResponse = await client
       .post(`/api/session/${sessionId}/attachments`)
       .attach('files', PNG_IMAGE, {
         filename: 'error.png',
@@ -349,11 +446,12 @@ describe('createWorkbenchApp', () => {
       }
     });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd: process.cwd() });
+    const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
     const sessionId = sessionResponse.body.session.id as string;
 
-    const uploadResponse = await request(app)
+    const uploadResponse = await client
       .post(`/api/session/${sessionId}/attachments`)
       .attach('files', Buffer.from([0xde, 0xad, 0xbe, 0xef]), {
         filename: 'payload.exe',
@@ -378,8 +476,9 @@ describe('createWorkbenchApp', () => {
       }
     });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
     const zip = createStoredZip([
       { name: 'logs/server.log', data: Buffer.from('ADF_FACES-30130') },
@@ -387,7 +486,7 @@ describe('createWorkbenchApp', () => {
       { name: 'binary/payload.bin', data: Buffer.from([0xde, 0xad]) }
     ]);
 
-    const uploadResponse = await request(app)
+    const uploadResponse = await client
       .post(`/api/session/${sessionId}/attachments`)
       .attach('files', zip, {
         filename: 'diagnostic.zip',
@@ -432,10 +531,11 @@ describe('createWorkbenchApp', () => {
       }
     });
     const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
-    const uploadResponse = await request(app)
+    const uploadResponse = await client
       .post(`/api/session/${sessionId}/attachments`)
       .attach('files', createStoredZip([{ name: 'payload.bin', data: Buffer.from([1, 2, 3]) }]), {
         filename: 'unsupported.zip',
@@ -553,22 +653,23 @@ describe('createWorkbenchApp', () => {
         status: 'connected'
       })
     });
+    const client = request.agent(app);
 
-    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionResponse = await client.post('/api/session').send({ cwd });
     const sessionId = sessionResponse.body.session.id as string;
-    await request(app).post(`/api/session/${sessionId}/prompt`).send({ prompt: 'analyze logs' });
+    await client.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'analyze logs' });
 
     const approval = engine.getPendingApprovals(sessionId)[0];
-    await request(app)
+    await client
       .post(`/api/session/${sessionId}/approvals/${approval!.requestId}`)
       .send({ decision: 'allow' });
 
-    const snapshotResponse = await request(app).get(`/api/session/${sessionId}`);
+    const snapshotResponse = await client.get(`/api/session/${sessionId}`);
     const reportId = snapshotResponse.body.snapshot.reports?.artifacts?.[0]?.id;
 
     expect(reportId).toBe('report-1');
 
-    const reportResponse = await request(app).get(
+    const reportResponse = await client.get(
       `/api/session/${sessionId}/reports/${reportId}/content`
     );
     expect(reportResponse.status).toBe(200);
@@ -584,6 +685,90 @@ describe('createWorkbenchApp', () => {
     expect(snapshotResponse.body.snapshot.reports.artifacts[0]).toMatchObject({
       requestId: approval!.requestId
     });
+  });
+
+  it('isolates report artifact content by browser owner', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-isolation-'));
+    const reportDir = join(cwd, 'reports');
+    const reportPath = join(reportDir, 'private-report.html');
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(reportPath, '<html><body>Owner A report</body></html>');
+
+    let sendTurnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' };
+      },
+      async *sendTurn() {
+        sendTurnCount += 1;
+        if (sendTurnCount === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'analyze_private_logs',
+            input: { log_folder: cwd }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Generated the private report.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const engine = createEngine({
+      provider,
+      executeTool: vi.fn(async () => ({
+        summary: 'Generated 1 private HTML report',
+        source: 'jd-mcp',
+        artifacts: [
+          {
+            id: 'private-report',
+            sessionId: 'pending',
+            toolName: 'analyze_private_logs',
+            source: 'jd-mcp',
+            kind: 'html-report',
+            title: 'Private Report',
+            filePath: reportPath,
+            fileName: 'private-report.html',
+            createdAt: '2026-05-14T00:00:00.000Z',
+            size: 40
+          }
+        ]
+      })),
+      toolCatalog: [
+        {
+          name: 'analyze_private_logs',
+          description: 'Analyze private logs.',
+          source: 'jd-mcp',
+          requiresApproval: true,
+          producesReports: true
+        }
+      ]
+    });
+    const app = createWorkbenchApp({ engine });
+    const ownerA = request.agent(app);
+    const ownerB = request.agent(app);
+
+    const sessionResponse = await ownerA.post('/api/session').send({ cwd });
+    const sessionId = sessionResponse.body.session.id as string;
+    await ownerA.post(`/api/session/${sessionId}/prompt`).send({ prompt: 'make report' });
+
+    const approval = engine.getPendingApprovals(sessionId)[0];
+    await ownerA
+      .post(`/api/session/${sessionId}/approvals/${approval!.requestId}`)
+      .send({ decision: 'allow' });
+
+    const ownerAReport = await ownerA.get(`/api/session/${sessionId}/reports/private-report/content`);
+    expect(ownerAReport.status).toBe(200);
+    expect(ownerAReport.text).toContain('Owner A report');
+
+    const ownerBReport = await ownerB.get(`/api/session/${sessionId}/reports/private-report/content`);
+    expect(ownerBReport.status).toBe(404);
   });
 });
 

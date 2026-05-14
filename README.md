@@ -35,11 +35,24 @@ Optional backend settings:
 
 ```bash
 PORT=4317
+SUPPORT_WORKBENCH_SESSION_MODE=isolated
 JD_MCP_ROOT=../jd-mcp
 JD_MCP_JDTOOLS_JAVA=C:/path/to/java.exe
 JD_MCP_JDTOOLS_DIR=C:/path/to/jdtools
 JD_MCP_FORMS_HOME=C:/path/to/forms
 ```
+
+### Session Privacy
+
+Support Workbench defaults to `SUPPORT_WORKBENCH_SESSION_MODE=isolated`. In this mode the backend assigns each browser an HttpOnly client cookie and persists that owner on new session records. Session list, resume/read, prompt, approval, stream, attachment, report, and delete APIs only resolve sessions owned by that browser. A new browser profile, machine, or incognito window starts with an empty session list by default.
+
+For single-user local troubleshooting where a deliberately shared global workspace is acceptable, set:
+
+```bash
+SUPPORT_WORKBENCH_SESSION_MODE=shared
+```
+
+Shared mode disables browser owner filtering and exposes all sessions in the workspace to every browser that can reach the backend. Do not use shared mode on a VM/IP deployment that multiple users can access.
 
 ## Development
 
