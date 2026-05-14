@@ -1,28 +1,10 @@
 import { Command, Keyboard, Sparkles, Upload, X, Zap } from 'lucide-react';
-import { DIAGNOSTIC_COMMANDS } from '../diagnosticCommands';
+import type { WorkbenchCommandInfo } from '../types';
 
 type HelpDrawerProps = {
   open: boolean;
+  commands: WorkbenchCommandInfo[];
   onClose: () => void;
-};
-
-const commandInitials: Record<string, string> = {
-  '/auto-triage': 'AT',
-  '/adf-logs': 'LG',
-  '/adf-performance': 'PF',
-  '/jdbc-leaks': 'DB',
-  '/thread-dumps': 'TD',
-  '/jbo-activity': 'JB',
-  '/workspace': 'WS',
-  '/incident-folder': 'IN',
-  '/forms-logs': 'FL',
-  '/jvm-controller-logs': 'JV',
-  '/forms-traces': 'FT',
-  '/translate-forms-trace': 'TR',
-  '/reports-logs': 'RP',
-  '/har-file': 'HR',
-  '/correlate-har-logs': 'CL',
-  '/compare': 'CP'
 };
 
 const keyboardShortcuts = [
@@ -32,10 +14,12 @@ const keyboardShortcuts = [
   ['Esc', 'dismiss']
 ];
 
-export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
+export function HelpDrawer({ open, commands, onClose }: HelpDrawerProps) {
   if (!open) {
     return null;
   }
+
+  const groupedCommands = groupCommands(commands);
 
   return (
     <div className="help-backdrop" role="presentation" onMouseDown={onClose}>
@@ -71,9 +55,9 @@ export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
               <p className="eyebrow">Command center</p>
               <h3>Actionable slash flows</h3>
               <p>
-                Use <code>/thread-dumps</code>, <code>/workspace</code>,{' '}
-                <code>/compare</code>, or <code>/auto-triage</code> to open a
-                guided command card.
+                Use <code>/commands</code> to inspect the available runtime
+                commands, or <code>/report</code> when the current evidence can
+                produce a diagnostic artifact.
               </p>
             </div>
           </section>
@@ -85,8 +69,8 @@ export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
               <h3>Use uploads and session sources</h3>
               <p>
                 Upload files, drop a ZIP, or reuse something already attached in
-                this session. The command card keeps the right source attached
-                to the right workflow.
+                this session. Runtime commands use the session context and
+                queued evidence that are visible in the workbench.
               </p>
             </div>
           </section>
@@ -97,9 +81,8 @@ export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
               <p className="eyebrow">Fast actions</p>
               <h3>Run app actions from / too</h3>
               <p>
-                Open workspace, open history, export the session, clear the
-                conversation, or rerun the latest analysis without leaving the
-                keyboard.
+                Inspect session state, list local skills, review configuration,
+                or compact the running conversation without leaving the keyboard.
               </p>
             </div>
           </section>
@@ -122,17 +105,22 @@ export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
           <section className="help-section">
             <h3>All slash commands</h3>
             <div className="help-command-list">
-              {DIAGNOSTIC_COMMANDS.map((command) => (
-                <article key={command.name} className="help-command-row">
-                  <span aria-hidden="true">{commandInitials[command.name]}</span>
-                  <div>
-                    <strong>
-                      <code>{command.name}</code>
-                      {titleFromCommand(command.name)}
-                    </strong>
-                    <p>{command.description}</p>
-                  </div>
-                </article>
+              {groupedCommands.map(([category, categoryCommands]) => (
+                <div key={category} className="help-command-group">
+                  <h4>{titleFromCategory(category)}</h4>
+                  {categoryCommands.map((command) => (
+                    <article key={command.name} className="help-command-row">
+                      <span aria-hidden="true">{initialsFromCommand(command.name)}</span>
+                      <div>
+                        <strong>
+                          <code>{command.name}</code>
+                          {titleFromCommand(command.name)}
+                        </strong>
+                        <p>{command.description}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               ))}
             </div>
           </section>
@@ -140,6 +128,38 @@ export function HelpDrawer({ open, onClose }: HelpDrawerProps) {
       </aside>
     </div>
   );
+}
+
+function groupCommands(commands: WorkbenchCommandInfo[]): Array<[WorkbenchCommandInfo['category'], WorkbenchCommandInfo[]]> {
+  const groups = new Map<WorkbenchCommandInfo['category'], WorkbenchCommandInfo[]>();
+  for (const command of commands) {
+    groups.set(command.category, [...(groups.get(command.category) ?? []), command]);
+  }
+
+  const order: WorkbenchCommandInfo['category'][] = [
+    'workflow',
+    'inspection',
+    'memory',
+    'integration',
+    'config'
+  ];
+
+  return [...groups.entries()].sort(
+    ([left], [right]) => order.indexOf(left) - order.indexOf(right)
+  );
+}
+
+function initialsFromCommand(commandName: string): string {
+  return commandName
+    .replace(/^\//, '')
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('')
+    .slice(0, 2);
+}
+
+function titleFromCategory(category: WorkbenchCommandInfo['category']): string {
+  return category.charAt(0).toUpperCase() + category.slice(1);
 }
 
 function titleFromCommand(commandName: string): string {

@@ -433,7 +433,11 @@ export function App({
         )}
       </div>
 
-      <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <HelpDrawer
+        open={helpOpen}
+        commands={snapshot.commands}
+        onClose={() => setHelpOpen(false)}
+      />
       <ReportViewerDrawer
         sessionId={snapshot.sessionId}
         report={selectedReport}

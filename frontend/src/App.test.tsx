@@ -1598,8 +1598,9 @@ describe('App', () => {
     expect(screen.getByText(/to run commands/i)).toBeInTheDocument();
     expect(screen.getByText(/slash commands guide the workflow/i)).toBeInTheDocument();
     expect(screen.getByText(/all slash commands/i)).toBeInTheDocument();
-    expect(screen.getAllByText('/thread-dumps').length).toBeGreaterThan(0);
-    expect(screen.getByText('/correlate-har-logs')).toBeInTheDocument();
+    expect(screen.getAllByText('/commands').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('/report').length).toBeGreaterThan(0);
+    expect(screen.queryByText('/auto-triage')).not.toBeInTheDocument();
     expect(screen.queryByText('Ctrl/Cmd+K')).not.toBeInTheDocument();
   });
 
@@ -1627,7 +1628,8 @@ describe('App', () => {
     expect(screen.getByRole('navigation', { name: /documentation section navigation/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /01 what support workbench does/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /slash-command workflows/i })).toBeInTheDocument();
-    expect(screen.getByText('/auto-triage')).toBeInTheDocument();
+    expect(screen.getByText('/commands')).toBeInTheDocument();
+    expect(screen.queryByText('/auto-triage')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/message support workbench/i)).not.toBeInTheDocument();
 
     expect(window.location.pathname).toBe('/docs');

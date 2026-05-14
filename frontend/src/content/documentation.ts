@@ -60,14 +60,14 @@ Slash commands are the fastest way to start a structured investigation.
 
 Common entry points include:
 
-- \`/auto-triage\` to choose the right diagnostic path from the current source
-- \`/adf-logs\`, \`/forms-logs\`, and \`/reports-logs\` for product-specific log review
-- \`/thread-dumps\` and \`/jdbc-leaks\` for runtime and pool investigations
-- \`/workspace\` for JDeveloper workspace inspection
-- \`/har-file\` and \`/correlate-har-logs\` for browser and server-side evidence together
-- \`/compare\` when you need two sources reviewed side by side
+- \`/commands\` to list the command set exposed by the current runtime
+- \`/report\` to force the configured report path when the queued evidence supports it
+- \`/session\` to inspect the current session metadata and runtime state
+- \`/diff\` to review tracked workspace changes from the runtime
+- \`/skills\` and \`/config\` to inspect local integrations when diagnosing environment setup
+- \`/compact\` when a long conversation needs to be condensed for later continuation
 
-The command card keeps the prompt, source selection, and expected output aligned so you do not need to hand-write the same diagnostic instructions every time.
+The help drawer reads from the runtime command catalog, so it should only advertise commands the current workbench actually exposes.
 `
   },
   {
@@ -84,7 +84,7 @@ Good habits:
 
 - upload the smallest bundle that still explains the issue
 - keep related files in the same session when they describe the same user action
-- use command cards when a workflow needs a specific source type
+- use slash commands only when the runtime exposes a command that matches the workflow
 - remove unrelated attachments before asking for a focused summary
 
 Workspace context is separate from uploaded evidence. It helps the assistant understand local files and diffs, while uploads represent the diagnostic sources you want analyzed.
@@ -158,7 +158,7 @@ Use this flow when a support case starts with incomplete or noisy evidence:
 
 1. Start a new chat for the issue or select the existing session for the same case
 2. Upload the smallest useful evidence bundle
-3. Run the most specific slash command available for that source
+3. Queue the relevant files and run the most specific available slash command for the question
 4. Review approvals and generated runtime events before continuing
 5. Open any report artifact and confirm it matches the uploaded source
 6. Ask a focused follow-up question, such as "what is the strongest evidence for the root cause?"
