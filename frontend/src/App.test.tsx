@@ -1859,11 +1859,11 @@ describe('App', () => {
     expect(main).toHaveAttribute('data-workspace-layout', 'open');
     expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /hide workspace/i }));
+    await user.click(screen.getByRole('button', { name: /close workspace/i }));
     expect(main).toHaveAttribute('data-workspace-layout', 'closed');
     expect(screen.queryByRole('complementary', { name: /workspace/i })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /show workspace/i }));
+    await user.click(screen.getByRole('button', { name: /open workspace/i }));
     expect(main).toHaveAttribute('data-workspace-layout', 'open');
     expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
   });
