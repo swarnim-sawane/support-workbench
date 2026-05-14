@@ -22,6 +22,8 @@ import type {
 
 export type PersistedSessionRecord = {
   session: EngineSession;
+  createdAt?: string;
+  updatedAt?: string;
   messages: EngineMessage[];
   modelHistory: EngineModelMessage[];
   pendingApprovals: PendingApproval[];
@@ -105,12 +107,14 @@ function readSessionSummary(cwd: string, fileName: string): EngineSessionSummary
     const record = JSON.parse(readFileSync(path, 'utf8')) as PersistedSessionRecord;
     const stats = statSync(path);
     const createdAt = firstDate(
+      record.createdAt,
       record.messages[0]?.createdAt,
       record.eventHistory[0]?.type === 'session.created' ? stats.birthtime.toISOString() : undefined,
       stats.birthtime.toISOString(),
       stats.ctime.toISOString()
     );
     const updatedAt = firstDate(
+      record.updatedAt,
       record.messages.at(-1)?.createdAt,
       record.eventHistory.at(-1)?.type ? stats.mtime.toISOString() : undefined,
       stats.mtime.toISOString(),
