@@ -2644,6 +2644,8 @@ describe('createEngine', () => {
 
     const engine = createEngine({ provider });
     const session = engine.createSession({ cwd });
+    const log = collectEvents();
+    engine.subscribe(session.id, log.push);
 
     await engine.submitPrompt(session.id, 'inspect the log');
 
@@ -2663,6 +2665,97 @@ describe('createEngine', () => {
       role: 'assistant',
       content: expect.stringContaining('Recovered')
     });
+    expect(log.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'message.system',
+          message: expect.objectContaining({
+            kind: 'command-error',
+            content: expect.stringContaining('Grep failed (recoverable attempt 1/3)')
+          })
+        })
+      ])
+    );
+  });
+
+  it('blocks unsupported tool calls before approval or execution', async () => {
+    const executeTool = vi.fn(async () => ({
+      summary: 'should not execute'
+    }));
+
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        yield {
+          type: 'tool_call',
+          toolName: 'analyze_adf_logs',
+          input: {
+            log_folder: 'logs'
+          },
+          reasoning: 'Try a stale unavailable analyzer call.'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_adf_logs',
+          description: 'Analyze ADF logs through jd-mcp.',
+          source: 'jd-mcp',
+          requiresApproval: true,
+          category: 'reports',
+          producesReports: true,
+          enabled: false,
+          visibility: 'unsupported',
+          stability: 'stable',
+          reason: 'JD_MCP_ROOT is not configured.'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd: process.cwd() });
+    const log = collectEvents();
+    engine.subscribe(session.id, log.push);
+
+    await engine.submitPrompt(session.id, 'Analyze logs');
+
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(engine.getPendingApprovals(session.id)).toEqual([]);
+    expect(log.events.map((event) => event.type)).not.toContain('permission.requested');
+    expect(log.events.map((event) => event.type)).not.toContain('tool.execution.started');
+    expect(log.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool.execution.failed',
+          toolName: 'analyze_adf_logs',
+          recoverable: false,
+          error: expect.stringContaining('JD_MCP_ROOT is not configured')
+        }),
+        expect.objectContaining({
+          type: 'message.system',
+          message: expect.objectContaining({
+            kind: 'command-error',
+            content: expect.stringContaining('analyze_adf_logs blocked')
+          })
+        })
+      ])
+    );
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(snapshot.status).toBe('blocked');
+    expect(snapshot.toolActivity).toEqual([
+      expect.objectContaining({
+        toolName: 'analyze_adf_logs',
+        status: 'failed',
+        recoverable: false,
+        error: expect.stringContaining('JD_MCP_ROOT is not configured')
+      })
+    ]);
   });
 
   it('lets the model retry successfully after a recoverable Grep failure', async () => {
