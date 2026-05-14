@@ -1226,10 +1226,11 @@ describe('App', () => {
           size: 128,
           promptVisibility: 'available',
           ocrStatus: 'failed',
+          ocrError: 'Windows OCR engine unavailable.',
           uploadedAt: '2026-04-24T00:00:00.000Z'
         }
       ]
-    } as WorkbenchSessionSnapshot;
+    } as unknown as WorkbenchSessionSnapshot;
 
     renderWorkbench({
       snapshot,
@@ -1258,6 +1259,7 @@ describe('App', () => {
     expect(screen.getByText(/ready for analysis/i)).toBeInTheDocument();
     expect(screen.getByText(/OCR ready/i)).toBeInTheDocument();
     expect(screen.getByText(/OCR failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Windows OCR engine unavailable/i)).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(6000);
