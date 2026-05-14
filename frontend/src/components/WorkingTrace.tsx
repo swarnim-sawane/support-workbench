@@ -106,6 +106,32 @@ function buildObservableTrace(
   const progressPhases = progressActivities.filter((activity) => activity.phase !== 'tool.executing');
   const runningProgress = findLatest(progressPhases, (activity) => activity.status === 'running');
   const runningActivities = snapshot.toolActivity.filter((activity) => activity.status === 'running');
+  const failedActivity = findLatest(
+    snapshot.toolActivity,
+    (activity) => activity.status === 'failed' || activity.status === 'denied'
+  );
+
+  if (snapshot.status === 'blocked') {
+    const failureText = failedActivity
+      ? withOptionalDetail(
+          buildFriendlyToolActivityTitle(failedActivity),
+          failedActivity.error ?? buildFriendlyToolActivityDetail(failedActivity)
+        )
+      : 'Processing stopped before a final answer';
+    const completedSteps = [
+      ...progressPhases
+        .filter((activity) => activity.status === 'completed')
+        .slice(-2)
+        .reverse()
+        .map((activity) => toProgressStep(activity, 'completed')),
+      ...buildCompletedToolSteps(snapshot.toolActivity)
+    ];
+
+    return {
+      summary: 'Processing blocked',
+      steps: compactSteps([{ text: failureText, kind: 'error' }, ...completedSteps]).slice(0, 5)
+    };
+  }
 
   const recoverableFailure = snapshot.toolActivity.find(
     (activity) => activity.status === 'failed' && activity.recoverable
@@ -162,6 +188,23 @@ function buildObservableTrace(
   if (input.showThinking || snapshot.status === 'running') {
     const text = input.label ?? 'Preparing answer';
     return { summary: text, steps: [{ text, kind: 'active' }] };
+  }
+
+  if (snapshot.status === 'completed') {
+    const completedProgressSteps = progressPhases
+      .filter((activity) => activity.status === 'completed')
+      .slice(-2)
+      .reverse()
+      .map((activity) => toProgressStep(activity, 'completed'));
+    const completedToolSteps = buildCompletedToolSteps(snapshot.toolActivity);
+    const steps = compactSteps([...completedProgressSteps, ...completedToolSteps]).slice(0, 5);
+
+    if (steps.length) {
+      return {
+        summary: 'Analysis complete',
+        steps
+      };
+    }
   }
 
   return { summary: '', steps: [] };
@@ -281,7 +324,9 @@ function firstStartedAt(snapshot: WorkbenchSessionSnapshot): string | undefined 
       (activity) => activity.status === 'running' && activity.startedAt
     )?.startedAt ??
     snapshot.toolActivity.find((activity) => activity.status === 'running' && activity.startedAt)
-      ?.startedAt
+      ?.startedAt ??
+    (snapshot.progressActivity ?? []).find((activity) => activity.startedAt)?.startedAt ??
+    snapshot.toolActivity.find((activity) => activity.startedAt)?.startedAt
   );
 }
 
