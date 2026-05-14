@@ -1808,6 +1808,34 @@ describe('App', () => {
 
     expect(within(rail).getByRole('button', { name: /delete running chat/i })).toBeDisabled();
   });
+
+  it('marks the chat frame to fill the space between the sidebar and workspace', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const main = screen.getByRole('main');
+    expect(main).toHaveClass('shell-main');
+    expect(main).toHaveAttribute('data-workspace-layout', 'open');
+    expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /hide workspace/i }));
+    expect(main).toHaveAttribute('data-workspace-layout', 'closed');
+    expect(screen.queryByRole('complementary', { name: /workspace/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /show workspace/i }));
+    expect(main).toHaveAttribute('data-workspace-layout', 'open');
+    expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
+  });
 });
 
 type RenderWorkbenchInput = {

@@ -371,7 +371,7 @@ export function App({
         {documentationOpen ? (
           <DocumentationPage onBackToWorkbench={backToWorkbench} />
         ) : (
-          <main className="shell-main">
+          <main className="shell-main" data-workspace-layout={workspaceOpen ? 'open' : 'closed'}>
             <section className="chat-shell" aria-label="Support Workbench conversation">
               <section
                 ref={chatScrollRef}

@@ -4471,6 +4471,93 @@ body {
   margin-top: 10px;
 }
 
+/* Authoritative chat column sizing and response overflow containment. */
+.shell-main {
+  --chat-content-width: 1040px;
+  --chat-bubble-width: 840px;
+}
+
+.shell-main[data-workspace-layout='open'] .chat-shell {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.message-list,
+.composer-dock {
+  width: min(100%, var(--chat-content-width));
+}
+
+.message-row.is-user {
+  padding-left: 8%;
+}
+
+.message-row.is-assistant {
+  padding-right: 4%;
+}
+
+.message-bubble {
+  max-width: min(var(--chat-bubble-width), 100%);
+  min-width: 0;
+}
+
+.markdown-content {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content a,
+.markdown-content .inline-code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.assistant-bubble pre {
+  max-width: 100%;
+}
+
+.assistant-bubble pre code {
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+.markdown-table-scroll {
+  max-width: 100%;
+  margin: 0.86rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-table-scroll table {
+  min-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+}
+
+.markdown-table-scroll th,
+.markdown-table-scroll td {
+  border: 1px solid var(--border);
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-table-scroll th {
+  background: var(--chat-card-soft, var(--surface-2));
+  color: var(--text);
+  font-weight: 700;
+}
+
 @media (max-width: 860px) {
   .app-shell[data-left-rail='open'] {
     grid-template-columns: minmax(236px, 72vw) minmax(0, 1fr);
