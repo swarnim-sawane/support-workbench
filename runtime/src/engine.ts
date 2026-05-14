@@ -1400,6 +1400,23 @@ function isRecoverableToolFailure(
   return !/\b(permission|approval|denied|unauthori[sz]ed|forbidden)\b/i.test(message);
 }
 
+function unavailableToolError(
+  toolName: string,
+  toolDescriptor: EngineToolDescriptor | undefined
+): string | null {
+  if (!toolDescriptor) {
+    return `Tool ${toolName} is not available in this runtime.`;
+  }
+
+  if (isToolVisibleToModel(toolDescriptor)) {
+    return null;
+  }
+
+  return toolDescriptor.reason
+    ? `Tool ${toolName} is unavailable: ${toolDescriptor.reason}`
+    : `Tool ${toolName} is unavailable in this runtime.`;
+}
+
 function buildRecoveryInstruction(
   toolName: string,
   inputValue: Record<string, unknown>,
@@ -1700,6 +1717,20 @@ export function createEngine(input: {
   ): EngineMessage {
     const systemMessage = createMessage('system', content, kind);
     state.messages.push(systemMessage);
+    return systemMessage;
+  }
+
+  function pushSystemMessageAndEmit(
+    state: SessionState,
+    content: string,
+    kind: EngineMessage['kind'] = 'default'
+  ): EngineMessage {
+    const systemMessage = pushSystemMessage(state, content, kind);
+    emit(state, {
+      type: 'message.system',
+      sessionId: state.session.id,
+      message: systemMessage
+    });
     return systemMessage;
   }
 
@@ -2285,7 +2316,7 @@ export function createEngine(input: {
           label: `Running ${toolName}`,
           toolName
         });
-        pushSystemMessage(
+        pushSystemMessageAndEmit(
           state,
           recoverable
             ? `${toolName} failed (recoverable attempt ${recoveryAttempt}/${MAX_RECOVERABLE_TOOL_FAILURES}): ${message}`
@@ -2330,7 +2361,7 @@ export function createEngine(input: {
 
       if (recoverable) {
         const exhaustedMessage = `Recovery budget exhausted after ${MAX_RECOVERABLE_TOOL_FAILURES} recoverable tool failures. Last ${toolName} error: ${message}`;
-        pushSystemMessage(state, exhaustedMessage, 'command-error');
+        pushSystemMessageAndEmit(state, exhaustedMessage, 'command-error');
       }
 
       if (!options.agentId) {
@@ -2369,7 +2400,7 @@ export function createEngine(input: {
       recordAgentToolResult(agent, toolUseId, toolName, result);
     } else {
       recordToolResult(state, toolUseId, toolName, result);
-      pushSystemMessage(state, `${toolName}: ${result.summary}`, 'tool');
+      pushSystemMessageAndEmit(state, `${toolName}: ${result.summary}`, 'tool');
     }
 
     const completedAt = new Date().toISOString();
@@ -2464,6 +2495,58 @@ export function createEngine(input: {
     return 'completed';
   }
 
+  function blockUnavailableToolCall(
+    state: SessionState,
+    requestId: string,
+    call: PreparedPendingToolCall,
+    inputValue: Record<string, unknown>,
+    toolDescriptor: EngineToolDescriptor | undefined,
+    error: string
+  ): void {
+    const source = toolDescriptor?.source ?? 'builtin';
+    const completedAt = new Date().toISOString();
+    const activity = {
+      requestId,
+      toolUseId: call.toolUseId,
+      toolName: call.toolName,
+      source,
+      category: toolDescriptor?.category,
+      producesReports: toolDescriptor?.producesReports ?? false,
+      status: 'failed',
+      input: inputValue,
+      reasoning: call.reasoning,
+      error,
+      metadata: {
+        recoverable: false,
+        blocked: true,
+        reason: error
+      },
+      recoverable: false,
+      completedAt
+    } satisfies EngineToolActivity;
+
+    if (toolDescriptor?.producesReports) {
+      state.reportSuggestion = null;
+    }
+    upsertToolActivity(state, activity);
+    pushSystemMessageAndEmit(state, `${call.toolName} blocked: ${error}`, 'command-error');
+    emit(state, {
+      type: 'tool.execution.failed',
+      sessionId: state.session.id,
+      requestId,
+      toolUseId: call.toolUseId,
+      toolName: call.toolName,
+      source,
+      category: toolDescriptor?.category,
+      producesReports: toolDescriptor?.producesReports ?? false,
+      error,
+      metadata: activity.metadata,
+      recoverable: false
+    });
+    state.session.status = 'blocked';
+    persistState(state);
+  }
+
   async function processMainToolQueue(
     state: SessionState,
     queuedCalls: PendingToolCall[],
@@ -2483,6 +2566,18 @@ export function createEngine(input: {
         source === 'jd-mcp'
           ? repairJdMcpInputFromAttachments(call.toolName, call.input, turnAttachments)
           : call.input;
+      const toolAvailabilityError = unavailableToolError(call.toolName, toolDescriptor);
+      if (toolAvailabilityError) {
+        blockUnavailableToolCall(
+          state,
+          requestId,
+          call,
+          inputValue,
+          toolDescriptor,
+          toolAvailabilityError
+        );
+        return 'blocked';
+      }
       const requiresApproval =
         toolDescriptor?.requiresApproval ??
         BUILTIN_TOOL_CATALOG.some((tool) => tool.name === call.toolName && tool.requiresApproval);
