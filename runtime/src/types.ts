@@ -597,33 +597,35 @@ export type EngineSessionSummary = {
 };
 
 export type WorkbenchEngine = {
-  createSession(input: { cwd: string; sessionId?: string }): EngineSession;
-  listSessions(cwd: string): EngineSessionSummary[];
-  deleteSession(sessionId: string, cwd: string): boolean;
-  subscribe(sessionId: string, listener: (event: EngineEvent) => void): () => void;
+  createSession(input: { cwd: string; sessionId?: string; ownerId?: string | null }): EngineSession;
+  listSessions(cwd: string, ownerId?: string | null): EngineSessionSummary[];
+  deleteSession(sessionId: string, cwd: string, ownerId?: string | null): boolean;
+  subscribe(sessionId: string, listener: (event: EngineEvent) => void, ownerId?: string | null): () => void;
   submitPrompt(
     sessionId: string,
     prompt: string,
     options?: {
       attachmentIds?: string[];
+      ownerId?: string | null;
     }
   ): Promise<void>;
   resolveApproval(
     sessionId: string,
     requestId: string,
-    resolution: EngineApprovalResolution
+    resolution: EngineApprovalResolution,
+    ownerId?: string | null
   ): Promise<void>;
-  addAttachment(sessionId: string, attachment: EngineAttachment): EngineAttachment;
-  recordAttachmentUpload(sessionId: string, attachmentIds: string[]): EngineMessage | null;
-  removeAttachment(sessionId: string, attachmentId: string): EngineAttachment | null;
-  getAttachment(sessionId: string, attachmentId: string): EngineAttachment | null;
-  getReportArtifact(sessionId: string, reportId: string): EngineReportArtifact | null;
-  getPendingApprovals(sessionId: string): PendingApproval[];
-  getEventHistory(sessionId: string): EngineEvent[];
-  getHistory(sessionId: string): EngineHistorySummary[];
-  getWorkspaceDiff(sessionId: string): EngineWorkspaceDiff[];
+  addAttachment(sessionId: string, attachment: EngineAttachment, ownerId?: string | null): EngineAttachment;
+  recordAttachmentUpload(sessionId: string, attachmentIds: string[], ownerId?: string | null): EngineMessage | null;
+  removeAttachment(sessionId: string, attachmentId: string, ownerId?: string | null): EngineAttachment | null;
+  getAttachment(sessionId: string, attachmentId: string, ownerId?: string | null): EngineAttachment | null;
+  getReportArtifact(sessionId: string, reportId: string, ownerId?: string | null): EngineReportArtifact | null;
+  getPendingApprovals(sessionId: string, ownerId?: string | null): PendingApproval[];
+  getEventHistory(sessionId: string, ownerId?: string | null): EngineEvent[];
+  getHistory(sessionId: string, ownerId?: string | null): EngineHistorySummary[];
+  getWorkspaceDiff(sessionId: string, ownerId?: string | null): EngineWorkspaceDiff[];
   getCommandCatalog(): EngineCommandInfo[];
-  getSnapshot(sessionId: string): EngineSessionSnapshot;
+  getSnapshot(sessionId: string, ownerId?: string | null): EngineSessionSnapshot;
   healthCheck(): Promise<EngineHealth>;
   cancelTurn(sessionId: string): Promise<void>;
 };

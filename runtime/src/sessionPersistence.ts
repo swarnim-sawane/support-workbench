@@ -21,6 +21,7 @@ import type {
 } from './types.js';
 
 export type PersistedSessionRecord = {
+  ownerId?: string | null;
   session: EngineSession;
   createdAt?: string;
   updatedAt?: string;
@@ -88,7 +89,10 @@ export function deletePersistedSessionUploads(cwd: string, sessionId: string): v
   });
 }
 
-export function listPersistedSessionSummaries(cwd: string): EngineSessionSummary[] {
+export function listPersistedSessionSummaries(
+  cwd: string,
+  ownerId?: string | null
+): EngineSessionSummary[] {
   const directory = sessionDir(cwd);
   if (!existsSync(directory)) {
     return [];
@@ -96,15 +100,31 @@ export function listPersistedSessionSummaries(cwd: string): EngineSessionSummary
 
   return readdirSync(directory)
     .filter((fileName) => fileName.endsWith('.json'))
-    .map((fileName) => readSessionSummary(cwd, fileName))
+    .map((fileName) => readSessionSummary(cwd, fileName, ownerId))
     .filter((summary): summary is EngineSessionSummary => summary !== null)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
-function readSessionSummary(cwd: string, fileName: string): EngineSessionSummary | null {
+export function persistedSessionOwner(record: PersistedSessionRecord): string | null {
+  return typeof record.ownerId === 'string' ? record.ownerId : null;
+}
+
+function ownerMatches(record: PersistedSessionRecord, ownerId?: string | null): boolean {
+  return ownerId === undefined || persistedSessionOwner(record) === ownerId;
+}
+
+function readSessionSummary(
+  cwd: string,
+  fileName: string,
+  ownerId?: string | null
+): EngineSessionSummary | null {
   const path = join(sessionDir(cwd), fileName);
   try {
     const record = JSON.parse(readFileSync(path, 'utf8')) as PersistedSessionRecord;
+    if (!ownerMatches(record, ownerId)) {
+      return null;
+    }
+
     const stats = statSync(path);
     const createdAt = firstDate(
       record.createdAt,

@@ -10,6 +10,7 @@ import {
   deletePersistedSessionUploads,
   listPersistedSessionSummaries,
   loadPersistedSession,
+  persistedSessionOwner,
   savePersistedSession,
   type PersistedSessionRecord
 } from './sessionPersistence.js';
@@ -78,6 +79,7 @@ const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'LogScan', 'WebF
 const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed', 'cancelled']);
 
 type SessionState = {
+  ownerId: string | null;
   session: EngineSession;
   createdAt: string;
   updatedAt: string;
@@ -163,6 +165,7 @@ function hydrateAgentState(agent: EngineAgent): AgentState {
 
 function toPersistedRecord(state: SessionState) {
   return {
+    ownerId: state.ownerId,
     session: state.session,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
@@ -187,9 +190,10 @@ function toPersistedRecord(state: SessionState) {
   };
 }
 
-function createSessionState(session: EngineSession): SessionState {
+function createSessionState(session: EngineSession, ownerId: string | null): SessionState {
   const createdAt = new Date().toISOString();
   return {
+    ownerId,
     session,
     createdAt,
     updatedAt: createdAt,
@@ -263,6 +267,7 @@ function hydrateSessionState(record: PersistedSessionRecord): SessionState {
   );
   const updatedAt = firstValidDate(record.updatedAt, record.messages.at(-1)?.createdAt, createdAt);
   return {
+    ownerId: persistedSessionOwner(record),
     session: record.session,
     createdAt,
     updatedAt,
@@ -1623,9 +1628,17 @@ export function createEngine(input: {
   const sessions = new Map<string, SessionState>();
   const systemPrompt = buildLeakedRuntimeSystemPrompt(modelToolCatalog);
 
-  function getSessionState(sessionId: string): SessionState {
+  function ownerCanAccess(state: SessionState, ownerId?: string | null): boolean {
+    return ownerId === undefined || state.ownerId === ownerId;
+  }
+
+  function persistedOwnerCanAccess(record: PersistedSessionRecord, ownerId?: string | null): boolean {
+    return ownerId === undefined || persistedSessionOwner(record) === ownerId;
+  }
+
+  function getSessionState(sessionId: string, ownerId?: string | null): SessionState {
     const state = sessions.get(sessionId);
-    if (!state) {
+    if (!state || !ownerCanAccess(state, ownerId)) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
     return state;
@@ -3410,16 +3423,26 @@ export function createEngine(input: {
   }
 
   return {
-    createSession({ cwd, sessionId }) {
+    createSession({ cwd, sessionId, ownerId }) {
       if (sessionId) {
+        if (!isSafeSessionId(sessionId)) {
+          throw new Error(`Invalid session id: ${sessionId}`);
+        }
+
         const existing = sessions.get(sessionId);
         if (existing) {
+          if (!ownerCanAccess(existing, ownerId)) {
+            throw new Error(`Unknown session: ${sessionId}`);
+          }
           touchSessionActivity(existing);
           return existing.session;
         }
 
         const persisted = loadPersistedSession(cwd, sessionId);
         if (persisted) {
+          if (!persistedOwnerCanAccess(persisted, ownerId)) {
+            throw new Error(`Unknown session: ${sessionId}`);
+          }
           const restored = hydrateSessionState(persisted);
           sessions.set(sessionId, restored);
           touchSessionActivity(restored);
@@ -3432,7 +3455,7 @@ export function createEngine(input: {
         cwd,
         status: 'idle'
       };
-      const state = createSessionState(session);
+      const state = createSessionState(session, ownerId ?? null);
       sessions.set(session.id, state);
       emit(state, {
         type: 'session.created',
@@ -3443,10 +3466,10 @@ export function createEngine(input: {
       return session;
     },
 
-    listSessions(cwd) {
-      const persisted = listPersistedSessionSummaries(cwd);
+    listSessions(cwd, ownerId) {
+      const persisted = listPersistedSessionSummaries(cwd, ownerId);
       const inMemory = Array.from(sessions.values())
-        .filter((state) => state.session.cwd === cwd)
+        .filter((state) => state.session.cwd === cwd && ownerCanAccess(state, ownerId))
         .map((state) => {
           const messages = state.messages;
           const createdAt = state.createdAt;
@@ -3475,7 +3498,7 @@ export function createEngine(input: {
       return [...summaries.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     },
 
-    deleteSession(sessionId, cwd) {
+    deleteSession(sessionId, cwd, ownerId) {
       if (!isSafeSessionId(sessionId)) {
         return false;
       }
@@ -3488,6 +3511,12 @@ export function createEngine(input: {
       if (state && state.session.cwd !== cwd) {
         return false;
       }
+      if (state && !ownerCanAccess(state, ownerId)) {
+        return false;
+      }
+      if (persisted && !persistedOwnerCanAccess(persisted, ownerId)) {
+        return false;
+      }
 
       const reportArtifacts = state?.reportArtifacts ?? persisted?.reports ?? [];
       deleteWorkspaceOwnedReportFiles(cwd, reportArtifacts);
@@ -3498,8 +3527,8 @@ export function createEngine(input: {
       return true;
     },
 
-    subscribe(sessionId, listener) {
-      const state = getSessionState(sessionId);
+    subscribe(sessionId, listener, ownerId) {
+      const state = getSessionState(sessionId, ownerId);
       for (const event of state.eventHistory) {
         listener(event);
       }
@@ -3510,7 +3539,7 @@ export function createEngine(input: {
     },
 
     async submitPrompt(sessionId, prompt, options) {
-      const state = getSessionState(sessionId);
+      const state = getSessionState(sessionId, options?.ownerId);
       const stableStatus = state.session.status;
       const turnAttachments = resolveTurnAttachments(state, options?.attachmentIds);
       const previousReportCount = state.reportArtifacts.length;
@@ -3624,8 +3653,8 @@ export function createEngine(input: {
       }
     },
 
-    async resolveApproval(sessionId, requestId, resolution: EngineApprovalResolution) {
-      const state = getSessionState(sessionId);
+    async resolveApproval(sessionId, requestId, resolution: EngineApprovalResolution, ownerId) {
+      const state = getSessionState(sessionId, ownerId);
       const pending = state.pendingApprovals.find((approval) => approval.requestId === requestId);
       if (!pending) {
         throw new Error(`Unknown approval request: ${requestId}`);
@@ -3738,8 +3767,8 @@ export function createEngine(input: {
       await runTurnLoop(state);
     },
 
-    addAttachment(sessionId, attachment) {
-      const state = getSessionState(sessionId);
+    addAttachment(sessionId, attachment, ownerId) {
+      const state = getSessionState(sessionId, ownerId);
       const existing = findAttachment(state, attachment.id);
       if (existing) {
         state.attachments = state.attachments.map((item) =>
@@ -3758,8 +3787,8 @@ export function createEngine(input: {
       return attachment;
     },
 
-    recordAttachmentUpload(sessionId, attachmentIds) {
-      const state = getSessionState(sessionId);
+    recordAttachmentUpload(sessionId, attachmentIds, ownerId) {
+      const state = getSessionState(sessionId, ownerId);
       const attachments = attachmentIds
         .map((attachmentId) => findAttachment(state, attachmentId))
         .filter((attachment): attachment is EngineAttachment => Boolean(attachment));
@@ -3787,8 +3816,8 @@ export function createEngine(input: {
       return systemMessage;
     },
 
-    removeAttachment(sessionId, attachmentId) {
-      const state = getSessionState(sessionId);
+    removeAttachment(sessionId, attachmentId, ownerId) {
+      const state = getSessionState(sessionId, ownerId);
       const attachment = findAttachment(state, attachmentId);
       if (!attachment) {
         return null;
@@ -3810,38 +3839,38 @@ export function createEngine(input: {
       return removedAttachment;
     },
 
-    getAttachment(sessionId, attachmentId) {
-      const attachment = findAttachment(getSessionState(sessionId), attachmentId);
+    getAttachment(sessionId, attachmentId, ownerId) {
+      const attachment = findAttachment(getSessionState(sessionId, ownerId), attachmentId);
       return attachment ? { ...attachment } : null;
     },
 
-    getReportArtifact(sessionId, reportId) {
-      const report = getSessionState(sessionId).reportArtifacts.find((artifact) => artifact.id === reportId);
+    getReportArtifact(sessionId, reportId, ownerId) {
+      const report = getSessionState(sessionId, ownerId).reportArtifacts.find((artifact) => artifact.id === reportId);
       return report ? { ...report } : null;
     },
 
-    getPendingApprovals(sessionId) {
-      return [...getSessionState(sessionId).pendingApprovals];
+    getPendingApprovals(sessionId, ownerId) {
+      return [...getSessionState(sessionId, ownerId).pendingApprovals];
     },
 
-    getEventHistory(sessionId) {
-      return [...getSessionState(sessionId).eventHistory];
+    getEventHistory(sessionId, ownerId) {
+      return [...getSessionState(sessionId, ownerId).eventHistory];
     },
 
-    getHistory(sessionId) {
-      return [...getSessionState(sessionId).historySummaries];
+    getHistory(sessionId, ownerId) {
+      return [...getSessionState(sessionId, ownerId).historySummaries];
     },
 
-    getWorkspaceDiff(sessionId) {
-      return [...getSessionState(sessionId).workspaceDiffs];
+    getWorkspaceDiff(sessionId, ownerId) {
+      return [...getSessionState(sessionId, ownerId).workspaceDiffs];
     },
 
     getCommandCatalog() {
       return [...COMMAND_CATALOG];
     },
 
-    getSnapshot(sessionId): EngineSessionSnapshot {
-      return buildSnapshot(getSessionState(sessionId));
+    getSnapshot(sessionId, ownerId): EngineSessionSnapshot {
+      return buildSnapshot(getSessionState(sessionId, ownerId));
     },
 
     healthCheck() {
