@@ -1604,6 +1604,37 @@ describe('App', () => {
     expect(screen.queryByText('Ctrl/Cmd+K')).not.toBeInTheDocument();
   });
 
+  it('anchors the workspace toggle to the right panel with action-specific labels', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const workspace = screen.getByRole('complementary', { name: /workspace/i });
+    const closeWorkspace = within(workspace).getByRole('button', { name: /close workspace/i });
+    expect(closeWorkspace).toHaveAttribute('title', 'Close workspace');
+    expect(screen.queryByRole('button', { name: /^workspace$/i })).not.toBeInTheDocument();
+
+    await user.click(closeWorkspace);
+
+    expect(screen.queryByRole('complementary', { name: /workspace/i })).not.toBeInTheDocument();
+    const openWorkspace = screen.getByRole('button', { name: /open workspace/i });
+    expect(openWorkspace).toHaveAttribute('title', 'Open workspace');
+
+    await user.click(openWorkspace);
+
+    expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close workspace/i })).toBeInTheDocument();
+  });
+
   it('opens the full documentation view from the header menu and returns to the workbench', async () => {
     const user = userEvent.setup();
     const noop = vi.fn();
