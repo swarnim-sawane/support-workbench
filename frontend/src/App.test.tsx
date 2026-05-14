@@ -9,6 +9,7 @@ describe('App', () => {
   afterEach(() => {
     vi.useRealTimers();
     window.history.pushState({}, '', '/');
+    vi.useRealTimers();
   });
 
   it('renders the Codex-style shell, transcript events, and permission overlay', async () => {
@@ -1200,7 +1201,97 @@ describe('App', () => {
     );
 
     expect(screen.getByRole('status', { name: /preparing answer/i })).toBeInTheDocument();
-    expect(screen.getByText(/working for/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Working$/)).toBeInTheDocument();
+    expect(screen.queryByText(/working for/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps running answer elapsed time anchored after switching sessions', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-24T00:02:05.000Z'));
+    const noop = vi.fn();
+    const runningSnapshot = {
+      ...buildInteractiveSnapshot(),
+      sessionId: 'session-running',
+      status: 'running',
+      messages: [
+        {
+          id: 'user-running',
+          role: 'user',
+          content: 'Analyze this log deeply'
+        }
+      ],
+      toolActivity: [],
+      reports: {
+        artifacts: []
+      },
+      session: {
+        branch: 'main',
+        activeTurnStartedAt: '2026-04-24T00:00:00.000Z'
+      }
+    } as unknown as WorkbenchSessionSnapshot;
+    const otherSnapshot = {
+      ...buildInteractiveSnapshot(),
+      sessionId: 'session-other',
+      messages: [
+        {
+          id: 'assistant-other',
+          role: 'assistant',
+          content: 'Other session is idle.'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    const { rerender } = render(
+      <App
+        snapshot={runningSnapshot}
+        activeSessionId="session-running"
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        queuedAttachmentIds={[]}
+        onPromptSubmit={noop}
+        onApprove={noop}
+        onAttachFiles={noop}
+        onRemoveAttachment={noop}
+        onQueueAttachment={noop}
+        onUnqueueAttachment={noop}
+      />
+    );
+
+    expect(screen.getByText('Working for 2m 5s')).toBeInTheDocument();
+
+    rerender(
+      <App
+        snapshot={otherSnapshot}
+        activeSessionId="session-other"
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        queuedAttachmentIds={[]}
+        onPromptSubmit={noop}
+        onApprove={noop}
+        onAttachFiles={noop}
+        onRemoveAttachment={noop}
+        onQueueAttachment={noop}
+        onUnqueueAttachment={noop}
+      />
+    );
+    expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
+
+    vi.setSystemTime(new Date('2026-04-24T00:02:10.000Z'));
+    rerender(
+      <App
+        snapshot={runningSnapshot}
+        activeSessionId="session-running"
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        queuedAttachmentIds={[]}
+        onPromptSubmit={noop}
+        onApprove={noop}
+        onAttachFiles={noop}
+        onRemoveAttachment={noop}
+        onQueueAttachment={noop}
+        onUnqueueAttachment={noop}
+      />
+    );
+
+    expect(screen.getByText('Working for 2m 10s')).toBeInTheDocument();
+    expect(screen.queryByText('Working for 0s')).not.toBeInTheDocument();
   });
 
   it('uses the workspace tabs and launches report viewer with Escape close', async () => {

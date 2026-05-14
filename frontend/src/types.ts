@@ -268,6 +268,7 @@ export type WorkbenchSessionSnapshot = {
   commands: WorkbenchCommandInfo[];
   session: {
     branch: string | null;
+    activeTurnStartedAt?: string;
   };
   integrations: WorkbenchIntegrationSnapshot;
 };

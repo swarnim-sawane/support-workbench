@@ -56,7 +56,7 @@ export function WorkingTrace({
         </span>
         <span className="working-summary-copy">
           <strong>{trace.summary}</strong>
-          <span>{active ? `Working for ${elapsed}` : `Worked for ${elapsed}`}</span>
+          <span>{buildElapsedSummary(active, elapsed)}</span>
         </span>
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </summary>
@@ -319,37 +319,44 @@ function findLatest<T>(items: T[], predicate: (item: T) => boolean): T | undefin
 }
 
 function firstStartedAt(snapshot: WorkbenchSessionSnapshot): string | undefined {
-  return (
-    (snapshot.progressActivity ?? []).find(
+  const runningProgressStartedAt = (snapshot.progressActivity ?? []).find(
       (activity) => activity.status === 'running' && activity.startedAt
-    )?.startedAt ??
-    snapshot.toolActivity.find((activity) => activity.status === 'running' && activity.startedAt)
-      ?.startedAt ??
+    )?.startedAt;
+  const runningToolStartedAt = snapshot.toolActivity.find(
+    (activity) => activity.status === 'running' && activity.startedAt
+  )?.startedAt;
+
+  if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
+    return snapshot.session.activeTurnStartedAt ?? runningProgressStartedAt ?? runningToolStartedAt;
+  }
+
+  return (
+    snapshot.session.activeTurnStartedAt ??
+    runningProgressStartedAt ??
+    runningToolStartedAt ??
     (snapshot.progressActivity ?? []).find((activity) => activity.startedAt)?.startedAt ??
     snapshot.toolActivity.find((activity) => activity.startedAt)?.startedAt
   );
 }
 
-function useElapsedLabel(active: boolean, startedAt?: string) {
-  const [localStartedAt, setLocalStartedAt] = useState(() => Date.now());
+function useElapsedLabel(active: boolean, startedAt?: string): string | null {
   const [now, setNow] = useState(() => Date.now());
+  const start = parseStableTime(startedAt);
 
   useEffect(() => {
-    if (active) {
-      setLocalStartedAt(Date.now());
-    }
-  }, [active]);
-
-  useEffect(() => {
-    if (!active) {
+    if (!active || start === null) {
       return undefined;
     }
 
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [active]);
+  }, [active, start]);
 
-  const start = startedAt ? Date.parse(startedAt) : localStartedAt;
+  if (!active || start === null) {
+    return null;
+  }
+
   const seconds = Math.max(0, Math.floor((now - start) / 1000));
 
   if (seconds < 60) {
@@ -359,4 +366,21 @@ function useElapsedLabel(active: boolean, startedAt?: string) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function parseStableTime(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildElapsedSummary(active: boolean, elapsed: string | null): string {
+  if (active) {
+    return elapsed ? `Working for ${elapsed}` : 'Working';
+  }
+
+  return elapsed ? `Worked for ${elapsed}` : 'Worked';
 }
