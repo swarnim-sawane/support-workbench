@@ -163,8 +163,7 @@ export function App({
     };
   }, []);
 
-  const reportSuggestion =
-    !snapshot.reports.artifacts.length && snapshot.reportSuggestion ? snapshot.reportSuggestion : null;
+  const reportSuggestion = snapshot.reportSuggestion;
   const showThinking = shouldShowThinking(snapshot);
   const selectedReport =
     snapshot.reports.artifacts.find((artifact) => artifact.id === selectedReportId) ??
