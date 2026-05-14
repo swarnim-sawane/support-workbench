@@ -43,6 +43,7 @@ export type EngineAttachment = {
   promptVisibility: EngineAttachmentPromptVisibility;
   ocrStatus: EngineAttachmentOcrStatus;
   extractedText?: string;
+  ocrError?: string;
   sourceArchive?: {
     id: string;
     name: string;

@@ -286,6 +286,56 @@ describe('createWorkbenchApp', () => {
     expect(userTurn?.content).toContain('HTTP 500 on localhost:4317');
   });
 
+  it('keeps image uploads when OCR processing throws and records the OCR error', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-backend-ocr-failure-'));
+    const engine = createEngine({
+      provider: {
+        async healthCheck() {
+          return { ok: true, provider: 'fake', model: 'fake-model' };
+        },
+        async *sendTurn() {
+          return;
+        },
+        async cancelTurn() {}
+      }
+    });
+    const app = createWorkbenchApp({
+      engine,
+      extractImageText: vi.fn(async () => {
+        throw new Error('Windows OCR engine unavailable.');
+      })
+    });
+
+    const sessionResponse = await request(app).post('/api/session').send({ cwd });
+    const sessionId = sessionResponse.body.session.id as string;
+
+    const uploadResponse = await request(app)
+      .post(`/api/session/${sessionId}/attachments`)
+      .attach('files', PNG_IMAGE, {
+        filename: 'error.png',
+        contentType: 'image/png'
+      });
+
+    expect(uploadResponse.status).toBe(201);
+    expect(uploadResponse.body.attachments).toEqual([
+      expect.objectContaining({
+        originalName: 'error.png',
+        kind: 'image',
+        ocrStatus: 'failed',
+        ocrError: 'Windows OCR engine unavailable.'
+      })
+    ]);
+    expect(uploadResponse.body.snapshot.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'attachment',
+          content: 'Uploaded 1 file',
+          attachmentIds: [uploadResponse.body.attachments[0].id]
+        })
+      ])
+    );
+  });
+
   it('rejects unsupported attachment types', async () => {
     const engine = createEngine({
       provider: {

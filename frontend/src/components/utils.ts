@@ -29,7 +29,7 @@ export function buildAttachmentStatus(attachment: WorkbenchAttachment): string {
       return 'OCR ready';
     }
     if (attachment.ocrStatus === 'failed') {
-      return 'OCR failed';
+      return attachment.ocrError ? `OCR failed: ${attachment.ocrError}` : 'OCR failed';
     }
   }
 

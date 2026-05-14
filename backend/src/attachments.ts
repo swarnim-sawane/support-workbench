@@ -186,10 +186,12 @@ export async function ingestAttachments(input: {
 
     let ocrStatus: EngineAttachment['ocrStatus'] = 'unavailable';
     let extractedText: string | undefined;
+    let ocrError: string | undefined;
     if (classification.kind === 'image') {
-      const ocrResult = await input.extractImageText(localPath);
+      const ocrResult = await extractImageTextSafely(input.extractImageText, localPath);
       ocrStatus = ocrResult.status;
       extractedText = ocrResult.text;
+      ocrError = ocrResult.error;
     }
 
     attachments.push({
@@ -203,6 +205,7 @@ export async function ingestAttachments(input: {
       promptVisibility: 'available',
       ocrStatus,
       ...(extractedText ? { extractedText } : {}),
+      ...(ocrError ? { ocrError } : {}),
       uploadedAt: new Date().toISOString()
     });
   }
@@ -240,10 +243,12 @@ async function ingestZipFile(input: {
 
     let ocrStatus: EngineAttachment['ocrStatus'] = 'unavailable';
     let extractedText: string | undefined;
+    let ocrError: string | undefined;
     if (classification.kind === 'image') {
-      const ocrResult = await input.extractImageText(localPath);
+      const ocrResult = await extractImageTextSafely(input.extractImageText, localPath);
       ocrStatus = ocrResult.status;
       extractedText = ocrResult.text;
+      ocrError = ocrResult.error;
     }
 
     attachments.push({
@@ -262,6 +267,7 @@ async function ingestZipFile(input: {
         relativePath: entry.relativePath
       },
       ...(extractedText ? { extractedText } : {}),
+      ...(ocrError ? { ocrError } : {}),
       uploadedAt: new Date().toISOString()
     });
   }
@@ -397,6 +403,20 @@ function sanitizeArchiveStoredName(name: string): string {
     .filter(Boolean)
     .map((part) => sanitizeFileName(part))
     .join('_') || 'attachment';
+}
+
+async function extractImageTextSafely(
+  extractImageText: ImageTextExtractor,
+  imagePath: string
+): Promise<ImageOcrResult> {
+  try {
+    return await extractImageText(imagePath);
+  } catch (error) {
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
 }
 
 export async function deleteAttachmentFile(attachment: EngineAttachment): Promise<void> {

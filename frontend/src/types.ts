@@ -39,6 +39,7 @@ export type WorkbenchAttachment = {
   promptVisibility: 'available' | 'removed';
   ocrStatus: 'pending' | 'completed' | 'failed' | 'unavailable';
   extractedText?: string;
+  ocrError?: string;
   sourceArchive?: {
     id: string;
     name: string;
