@@ -79,6 +79,8 @@ const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed
 
 type SessionState = {
   session: EngineSession;
+  createdAt: string;
+  updatedAt: string;
   messages: EngineMessage[];
   modelHistory: EngineModelMessage[];
   pendingApprovals: PendingApproval[];
@@ -162,6 +164,8 @@ function hydrateAgentState(agent: EngineAgent): AgentState {
 function toPersistedRecord(state: SessionState) {
   return {
     session: state.session,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
     messages: state.messages,
     modelHistory: state.modelHistory,
     pendingApprovals: state.pendingApprovals,
@@ -184,8 +188,11 @@ function toPersistedRecord(state: SessionState) {
 }
 
 function createSessionState(session: EngineSession): SessionState {
+  const createdAt = new Date().toISOString();
   return {
     session,
+    createdAt,
+    updatedAt: createdAt,
     messages: [],
     modelHistory: [],
     pendingApprovals: [],
@@ -249,8 +256,16 @@ function normalizeHistorySummary(summary: PersistedSessionRecord['historySummari
 }
 
 function hydrateSessionState(record: PersistedSessionRecord): SessionState {
+  const createdAt = firstValidDate(
+    record.createdAt,
+    record.messages[0]?.createdAt,
+    new Date().toISOString()
+  );
+  const updatedAt = firstValidDate(record.updatedAt, record.messages.at(-1)?.createdAt, createdAt);
   return {
     session: record.session,
+    createdAt,
+    updatedAt,
     messages: record.messages,
     modelHistory: record.modelHistory,
     pendingApprovals: record.pendingApprovals,
@@ -272,6 +287,15 @@ function hydrateSessionState(record: PersistedSessionRecord): SessionState {
     branch: record.branch,
     listeners: new Set()
   };
+}
+
+function firstValidDate(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    if (value && !Number.isNaN(Date.parse(value))) {
+      return value;
+    }
+  }
+  return new Date().toISOString();
 }
 
 export function buildDefaultIntegrationSnapshot(
@@ -1611,7 +1635,13 @@ export function createEngine(input: {
     savePersistedSession(state.session.cwd, toPersistedRecord(state));
   }
 
+  function touchSessionActivity(state: SessionState): void {
+    state.updatedAt = new Date().toISOString();
+    persistState(state);
+  }
+
   function emit(state: SessionState, event: EngineEvent): void {
+    state.updatedAt = new Date().toISOString();
     state.eventHistory.push(event);
     for (const listener of state.listeners) {
       listener(event);
@@ -3384,6 +3414,7 @@ export function createEngine(input: {
       if (sessionId) {
         const existing = sessions.get(sessionId);
         if (existing) {
+          touchSessionActivity(existing);
           return existing.session;
         }
 
@@ -3391,6 +3422,7 @@ export function createEngine(input: {
         if (persisted) {
           const restored = hydrateSessionState(persisted);
           sessions.set(sessionId, restored);
+          touchSessionActivity(restored);
           return restored.session;
         }
       }
@@ -3417,8 +3449,8 @@ export function createEngine(input: {
         .filter((state) => state.session.cwd === cwd)
         .map((state) => {
           const messages = state.messages;
-          const createdAt = messages[0]?.createdAt ?? new Date().toISOString();
-          const updatedAt = messages.at(-1)?.createdAt ?? createdAt;
+          const createdAt = state.createdAt;
+          const updatedAt = state.updatedAt;
           const firstUserMessage = messages.find((message) => message.role === 'user');
           const firstAssistantMessage = messages.find((message) => message.role === 'assistant');
           const title = firstUserMessage ? truncateSessionText(firstUserMessage.content, 56) : '';

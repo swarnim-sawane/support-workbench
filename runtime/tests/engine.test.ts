@@ -470,6 +470,81 @@ describe('createEngine', () => {
     expect(resumed.history.summaries[0]?.preview).toContain('First prompt');
   });
 
+  it('keeps empty session summary timestamps stable across repeated list reads', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-24T10:00:00.000Z'));
+    try {
+      const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-empty-session-order-'));
+      const engine = createEngine({
+        provider: {
+          async healthCheck() {
+            return { ok: true, provider: 'fake', model: 'fake-model' };
+          },
+          async *sendTurn() {
+            return;
+          },
+          async cancelTurn() {}
+        }
+      });
+
+      const firstSession = engine.createSession({ cwd, sessionId: 'session-first' });
+      vi.setSystemTime(new Date('2026-04-24T10:05:00.000Z'));
+      const secondSession = engine.createSession({ cwd, sessionId: 'session-second' });
+
+      const firstRead = engine.listSessions(cwd);
+      vi.setSystemTime(new Date('2026-04-24T11:00:00.000Z'));
+      const secondRead = engine.listSessions(cwd);
+
+      expect(firstRead.map((session) => session.id)).toEqual([secondSession.id, firstSession.id]);
+      expect(secondRead.map((session) => session.id)).toEqual([secondSession.id, firstSession.id]);
+      expect(secondRead).toEqual(firstRead);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('moves an existing session to the top when it is reattached and preserves that order after reload', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-24T10:00:00.000Z'));
+    try {
+      const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-reattach-order-'));
+      const provider: EngineModelProvider = {
+        async healthCheck() {
+          return { ok: true, provider: 'fake', model: 'fake-model' };
+        },
+        async *sendTurn() {
+          return;
+        },
+        async cancelTurn() {}
+      };
+      const engine = createEngine({ provider });
+
+      const firstSession = engine.createSession({ cwd, sessionId: 'session-first' });
+      vi.setSystemTime(new Date('2026-04-24T10:05:00.000Z'));
+      const secondSession = engine.createSession({ cwd, sessionId: 'session-second' });
+      expect(engine.listSessions(cwd).map((session) => session.id)).toEqual([
+        secondSession.id,
+        firstSession.id
+      ]);
+
+      vi.setSystemTime(new Date('2026-04-24T10:10:00.000Z'));
+      engine.createSession({ cwd, sessionId: firstSession.id });
+
+      expect(engine.listSessions(cwd).map((session) => session.id)).toEqual([
+        firstSession.id,
+        secondSession.id
+      ]);
+
+      const reloadedEngine = createEngine({ provider });
+      expect(reloadedEngine.listSessions(cwd).map((session) => session.id)).toEqual([
+        firstSession.id,
+        secondSession.id
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('persists session attachments and injects local file refs plus OCR context into model turns', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-attachments-'));
     const sessionId = 'session-with-attachments';
