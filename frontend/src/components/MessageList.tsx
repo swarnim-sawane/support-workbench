@@ -32,7 +32,9 @@ export function MessageList({
     );
   }
 
+  const hasProgressActivity = (snapshot.progressActivity ?? []).length > 0;
   const hasRuntimeContent =
+    hasProgressActivity ||
     snapshot.reports.artifacts.length > 0 ||
     Boolean(reportSuggestion) ||
     snapshot.agents.length > 0 ||
@@ -80,11 +82,27 @@ export function MessageList({
           onPromptSubmit={onPromptSubmit}
         />
       ) : null}
-      {showThinking || snapshot.status === 'running' || snapshot.status === 'awaiting_approval' ? (
+      {shouldShowWorkingTrace(snapshot, showThinking) ? (
         <WorkingTrace snapshot={snapshot} showThinking={showThinking} />
       ) : null}
     </div>
   );
+}
+
+function shouldShowWorkingTrace(
+  snapshot: WorkbenchSessionSnapshot,
+  showThinking: boolean
+): boolean {
+  if (showThinking || snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
+    return true;
+  }
+
+  const hasObservableWork =
+    snapshot.toolActivity.length > 0 ||
+    (snapshot.progressActivity ?? []).length > 0 ||
+    snapshot.agents.length > 0;
+
+  return hasObservableWork && (snapshot.status === 'blocked' || snapshot.status === 'completed');
 }
 
 function FragmentWithRuntime({

@@ -622,6 +622,140 @@ describe('App', () => {
     expect(screen.queryByText('Preparing answer')).not.toBeInTheDocument();
   });
 
+  it('shows progress-only processing even before assistant text is available', () => {
+    const noop = vi.fn();
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running',
+        messages: [],
+        tasks: [],
+        memory: {
+          entries: []
+        },
+        history: {
+          summaries: []
+        },
+        agents: [],
+        toolActivity: [],
+        reports: {
+          artifacts: []
+        },
+        progressActivity: [
+          {
+            id: 'progress-analysis',
+            phase: 'model.thinking',
+            label: 'Analyzing uploaded evidence',
+            detail: '8 files selected',
+            status: 'running',
+            startedAt: '2026-04-24T00:00:02.000Z'
+          }
+        ]
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(
+      screen.getByRole('status', { name: /analyzing uploaded evidence/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Analyzing uploaded evidence - 8 files selected')).toBeInTheDocument();
+    expect(screen.queryByText(/drop a file, ask a question/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps terminal processing state visible after a blocked or completed turn', () => {
+    const noop = vi.fn();
+    const blockedSnapshot = {
+      ...buildInteractiveSnapshot(),
+      status: 'blocked',
+      messages: [
+        {
+          id: 'user-blocked',
+          role: 'user',
+          content: 'Analyze the uploaded logs'
+        }
+      ],
+      progressActivity: [
+        {
+          id: 'progress-analysis-blocked',
+          phase: 'model.thinking',
+          label: 'Analyzing uploaded evidence',
+          detail: 'blocked by analyzer failure',
+          status: 'completed',
+          startedAt: '2026-04-24T00:00:01.000Z',
+          completedAt: '2026-04-24T00:00:05.000Z'
+        }
+      ],
+      toolActivity: [
+        {
+          requestId: 'req-blocked',
+          toolUseId: 'tool-blocked',
+          toolName: 'analyze_adf_logs',
+          source: 'jd-mcp',
+          status: 'failed',
+          input: {
+            log_folder: 'C:/repo/.claude-oca/uploads/session-1'
+          },
+          error: 'Analyzer exited before producing diagnostics',
+          startedAt: '2026-04-24T00:00:02.000Z',
+          completedAt: '2026-04-24T00:00:05.000Z'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    const { rerender } = renderWorkbench({
+      snapshot: blockedSnapshot,
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(screen.getByRole('status', { name: /processing blocked/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Analyzer exited before producing diagnostics/i).length).toBeGreaterThan(0);
+
+    rerender(
+      <App
+        snapshot={{
+          ...blockedSnapshot,
+          status: 'completed',
+          messages: [
+            ...blockedSnapshot.messages,
+            {
+              id: 'assistant-final',
+              role: 'assistant',
+              content: 'Root cause: the managed server returned HTTP 500 during checkout.'
+            }
+          ],
+          toolActivity: blockedSnapshot.toolActivity.map((activity) => ({
+            ...activity,
+            status: 'completed',
+            summary: 'Correlated access and catalina logs'
+          }))
+        }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        queuedAttachmentIds={[]}
+        onPromptSubmit={noop}
+        onApprove={noop}
+        onAttachFiles={noop}
+        onRemoveAttachment={noop}
+        onQueueAttachment={noop}
+        onUnqueueAttachment={noop}
+      />
+    );
+
+    expect(screen.getByRole('status', { name: /analysis complete/i })).toBeInTheDocument();
+    expect(screen.getByText(/Root cause: the managed server returned HTTP 500/i)).toBeInTheDocument();
+  });
+
   it('uses human readable Codex-style labels for active file inspection', () => {
     const noop = vi.fn();
     renderWorkbench({
