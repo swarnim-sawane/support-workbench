@@ -606,6 +606,7 @@ export type WorkbenchEngine = {
     prompt: string,
     options?: {
       attachmentIds?: string[];
+      jdMcpToolName?: string;
     }
   ): Promise<void>;
   resolveApproval(

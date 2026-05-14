@@ -892,6 +892,193 @@ function folderForAttachment(attachment: EngineAttachment): string {
     : attachment.localPath;
 }
 
+function attachmentLookupText(attachment: EngineAttachment): string {
+  return [
+    attachment.originalName,
+    attachment.storedName,
+    attachment.sourceArchive?.relativePath ?? ''
+  ].join(' ').toLowerCase();
+}
+
+function attachmentExtension(attachment: EngineAttachment): string {
+  return extname(attachment.originalName || attachment.storedName).toLowerCase();
+}
+
+function isNamedAttachment(attachment: EngineAttachment, pattern: RegExp): boolean {
+  return pattern.test(attachmentLookupText(attachment));
+}
+
+function isHarAttachment(attachment: EngineAttachment): boolean {
+  return attachmentExtension(attachment) === '.har';
+}
+
+function isFormsTraceAttachment(attachment: EngineAttachment): boolean {
+  return attachmentExtension(attachment) === '.trc';
+}
+
+function isThreadDumpAttachment(attachment: EngineAttachment): boolean {
+  const extension = attachmentExtension(attachment);
+  return (
+    extension === '.dmp' ||
+    extension === '.dump' ||
+    extension === '.tdump' ||
+    extension === '.zip' ||
+    isNamedAttachment(attachment, /\b(thread|javacore|threaddump|thread-dump)\b/)
+  );
+}
+
+function isFormsDumpAttachment(attachment: EngineAttachment): boolean {
+  return isNamedAttachment(attachment, /\bfrmweb_dump_/);
+}
+
+function isEarAttachment(attachment: EngineAttachment): boolean {
+  return attachmentExtension(attachment) === '.ear';
+}
+
+function isWorkspaceAttachment(attachment: EngineAttachment): boolean {
+  return (
+    isNamedAttachment(attachment, /\b(jdeveloper|workspace|\.jws|\.jpr|adf|model|viewcontroller)\b/) ||
+    attachmentExtension(attachment) === '.jws' ||
+    attachmentExtension(attachment) === '.jpr'
+  );
+}
+
+function firstAttachment(
+  attachments: EngineAttachment[],
+  predicate: (attachment: EngineAttachment) => boolean
+): EngineAttachment | null {
+  return attachments.find(
+    (attachment) => attachment.promptVisibility === 'available' && predicate(attachment)
+  ) ?? null;
+}
+
+function firstLogLikeAttachment(attachments: EngineAttachment[]): EngineAttachment | null {
+  return firstAttachment(
+    attachments,
+    (attachment) => isLogLikeTextAttachment(attachment) || isDiagnosticLikeTextAttachment(attachment)
+  );
+}
+
+function buildGuidedJdMcpInput(
+  toolName: string,
+  attachments: EngineAttachment[]
+): { input: Record<string, unknown>; attachmentIds: string[] } | { error: string } {
+  const harAttachment = firstAttachment(attachments, isHarAttachment);
+  const accessLogAttachment = firstAttachment(attachments, isAccessLogAttachment);
+  const logAttachment = firstLogLikeAttachment(attachments);
+  const threadDumpAttachment = firstAttachment(attachments, isThreadDumpAttachment);
+  const formsTraceAttachment = firstAttachment(attachments, isFormsTraceAttachment);
+  const formsDumpAttachment = firstAttachment(attachments, isFormsDumpAttachment);
+  const earAttachment = firstAttachment(attachments, isEarAttachment);
+  const workspaceAttachment = firstAttachment(attachments, isWorkspaceAttachment) ?? attachments[0] ?? null;
+
+  switch (toolName) {
+    case 'analyze_har_file':
+      return harAttachment
+        ? { input: { har_file_path: harAttachment.localPath }, attachmentIds: [harAttachment.id] }
+        : { error: 'Analyze HAR requires an attached .har file.' };
+    case 'correlate_har_with_logs': {
+      const serverLogAttachment = accessLogAttachment ?? logAttachment;
+      return harAttachment && serverLogAttachment
+        ? {
+            input: {
+              har_file_path: harAttachment.localPath,
+              log_folder_path: folderForAttachment(serverLogAttachment)
+            },
+            attachmentIds: [harAttachment.id, serverLogAttachment.id]
+          }
+        : { error: 'Correlate HAR with logs requires one .har file and one server log attachment.' };
+    }
+    case 'analyze_access_logs':
+      return accessLogAttachment
+        ? { input: { log_folder: folderForAttachment(accessLogAttachment) }, attachmentIds: [accessLogAttachment.id] }
+        : { error: 'Analyze access logs requires an attached access*.log file.' };
+    case 'analyze_adf_logs':
+      return logAttachment
+        ? { input: { log_folder: folderForAttachment(logAttachment), mode: 'adf' }, attachmentIds: [logAttachment.id] }
+        : { error: 'Analyze ADF diagnostic logs requires an attached diagnostic log.' };
+    case 'read_logs':
+      return logAttachment
+        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+        : { error: 'Read ODL logs requires an attached log file or log folder.' };
+    case 'analyze_adf_perf':
+      return logAttachment
+        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+        : { error: 'Analyze ADF performance logs requires an attached ADF diagnostic log.' };
+    case 'review_jbo_activity':
+      return logAttachment
+        ? { input: { input_path: logAttachment.localPath }, attachmentIds: [logAttachment.id] }
+        : { error: 'Review JBO activity requires an attached JBO or ADF log.' };
+    case 'analyze_view_expired':
+      return logAttachment
+        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+        : { error: 'Analyze ViewExpiredException evidence requires an attached ADF diagnostic log.' };
+    case 'analyze_thread_dumps':
+      return threadDumpAttachment
+        ? { input: { folder: folderForAttachment(threadDumpAttachment) }, attachmentIds: [threadDumpAttachment.id] }
+        : { error: 'Analyze thread dumps requires a thread dump file, dump folder, or ZIP bundle.' };
+    case 'translate_forms_trace':
+      return formsTraceAttachment
+        ? { input: { trc_file: formsTraceAttachment.localPath, mode: 'enhanced' }, attachmentIds: [formsTraceAttachment.id] }
+        : { error: 'Translate Forms trace requires an attached .trc file.' };
+    case 'review_forms_traces':
+      return formsDumpAttachment
+        ? { input: { folder: folderForAttachment(formsDumpAttachment) }, attachmentIds: [formsDumpAttachment.id] }
+        : { error: 'Review Forms trace dumps requires frmweb_dump_* files.' };
+    case 'analyze_jvm_logs':
+      return logAttachment
+        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+        : { error: 'Analyze JVM Controller logs requires attached JVM Controller log files.' };
+    case 'analyze_workspace':
+      return workspaceAttachment
+        ? { input: { workspace_folder: folderForAttachment(workspaceAttachment) }, attachmentIds: [workspaceAttachment.id] }
+        : { error: 'Analyze workspace requires an attached workspace or extracted project bundle.' };
+    case 'check_ha_compliance':
+      return earAttachment
+        ? { input: { input_path: earAttachment.localPath, input_type: 'ear' }, attachmentIds: [earAttachment.id] }
+        : workspaceAttachment
+          ? { input: { input_path: folderForAttachment(workspaceAttachment), input_type: 'folder' }, attachmentIds: [workspaceAttachment.id] }
+          : { error: 'Check HA compliance requires an attached workspace folder or .ear file.' };
+    case 'extract_db_scripts':
+      return workspaceAttachment
+        ? { input: { workspace_folder: folderForAttachment(workspaceAttachment) }, attachmentIds: [workspaceAttachment.id] }
+        : { error: 'Extract DB scripts requires an attached ADF workspace or model project.' };
+    case 'analyze_jdbc_leaks':
+      return logAttachment
+        ? { input: { dump_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+        : { error: 'Analyze JDBC leaks requires an attached JDBC profiling dump folder.' };
+    case 'analyze_incident':
+      return workspaceAttachment
+        ? { input: { incident_folder: folderForAttachment(workspaceAttachment) }, attachmentIds: [workspaceAttachment.id] }
+        : { error: 'Analyze incident requires an attached ADR incident folder.' };
+    case 'triage_text_diagnostics':
+      return logAttachment
+        ? {
+            input: {
+              input_path: logAttachmentsForPreScan(attachments).length > 1
+                ? folderForAttachment(logAttachment)
+                : logAttachment.localPath
+            },
+            attachmentIds: [logAttachment.id]
+          }
+        : { error: 'Pre-scan text diagnostics requires at least one log-like text attachment.' };
+    case 'list_directory':
+      return workspaceAttachment
+        ? { input: { path: folderForAttachment(workspaceAttachment) }, attachmentIds: [workspaceAttachment.id] }
+        : { error: 'Browse uploaded folder requires at least one attachment.' };
+    case 'read_file_text':
+      return attachments[0]
+        ? { input: { path: attachments[0].localPath, limit: DEFAULT_BULK_READ_LIMIT }, attachmentIds: [attachments[0].id] }
+        : { error: 'Read text file excerpt requires at least one attachment.' };
+    default:
+      return { error: `No guided JD MCP input mapping is available for ${toolName}.` };
+  }
+}
+
+function createGuidedJdMcpUnavailableMessage(toolName: string, reason: string): string {
+  return `${toolName} cannot run from the guided JD MCP action: ${reason}`;
+}
+
 function repairJdMcpInputFromAttachments(
   toolName: string,
   inputValue: Record<string, unknown>,
@@ -3409,6 +3596,127 @@ export function createEngine(input: {
     return true;
   }
 
+  async function handleGuidedJdMcpInvocation(
+    state: SessionState,
+    toolName: string,
+    stableStatus: EngineSession['status'],
+    turnAttachments: EngineAttachment[]
+  ): Promise<boolean> {
+    const toolDescriptor = findToolDescriptor(toolCatalog, toolName);
+    if (!toolDescriptor || toolDescriptor.source !== 'jd-mcp') {
+      const summary = createGuidedJdMcpUnavailableMessage(
+        toolName,
+        'the tool is not available in the current JD MCP catalog.'
+      );
+      pushSystemMessage(state, summary, 'command-error');
+      state.session.status = finalizeLocalCommandStatus(state, stableStatus);
+      emit(state, {
+        type: 'turn.completed',
+        sessionId: state.session.id,
+        status: 'completed'
+      });
+      persistState(state);
+      return true;
+    }
+
+    if (!isToolVisibleToModel(toolDescriptor)) {
+      const summary = createGuidedJdMcpUnavailableMessage(
+        toolName,
+        toolDescriptor.reason ?? 'the tool is disabled or unsupported in this session.'
+      );
+      pushSystemMessage(state, summary, 'command-error');
+      state.session.status = finalizeLocalCommandStatus(state, stableStatus);
+      emit(state, {
+        type: 'turn.completed',
+        sessionId: state.session.id,
+        status: 'completed'
+      });
+      persistState(state);
+      return true;
+    }
+
+    const mapped = buildGuidedJdMcpInput(toolName, turnAttachments);
+    if ('error' in mapped) {
+      const summary = createGuidedJdMcpUnavailableMessage(toolName, mapped.error);
+      pushSystemMessage(state, summary, 'command-error');
+      state.session.status = finalizeLocalCommandStatus(state, stableStatus);
+      emit(state, {
+        type: 'turn.completed',
+        sessionId: state.session.id,
+        status: 'completed'
+      });
+      persistState(state);
+      return true;
+    }
+
+    const requestId = randomUUID();
+    const toolUseId = randomUUID();
+    const reasoning = `Prepared from guided composer action for ${toolName}.`;
+
+    if (toolDescriptor.requiresApproval) {
+      state.pendingApprovals.push({
+        requestId,
+        toolUseId,
+        toolName,
+        source: 'jd-mcp',
+        category: toolDescriptor.category,
+        input: mapped.input,
+        reasoning,
+        producesReports: toolDescriptor.producesReports,
+        requestedAt: new Date().toISOString(),
+        resumeAfterApproval: false
+      });
+      state.session.status = 'awaiting_approval';
+      upsertToolActivity(state, {
+        requestId,
+        toolUseId,
+        toolName,
+        source: 'jd-mcp',
+        category: toolDescriptor.category,
+        producesReports: toolDescriptor.producesReports,
+        status: 'pending',
+        input: mapped.input,
+        reasoning
+      });
+      pushSystemMessage(state, `Prepared ${toolName} for approval.`, 'command');
+      emit(state, {
+        type: 'permission.requested',
+        sessionId: state.session.id,
+        requestId,
+        toolUseId,
+        toolName,
+        source: 'jd-mcp',
+        category: toolDescriptor.category,
+        input: mapped.input,
+        reasoning,
+        producesReports: toolDescriptor.producesReports
+      });
+      persistState(state);
+      return true;
+    }
+
+    state.session.status = 'running';
+    const outcome = await completeToolExecution(
+      state,
+      requestId,
+      toolUseId,
+      toolName,
+      mapped.input,
+      {
+        reasoning
+      }
+    );
+    const completed = outcome === 'completed';
+    state.session.status = finalizeLocalCommandStatus(state, completed ? 'completed' : 'blocked');
+    emit(state, {
+      type: 'turn.completed',
+      sessionId: state.session.id,
+      status: completed ? 'completed' : 'blocked'
+    });
+    persistState(state);
+    return true;
+  }
+
   return {
     createSession({ cwd, sessionId }) {
       if (sessionId) {
@@ -3530,6 +3838,19 @@ export function createEngine(input: {
         sessionId,
         message: userMessage
       });
+
+      if (options?.jdMcpToolName) {
+        if (
+          await handleGuidedJdMcpInvocation(
+            state,
+            options.jdMcpToolName,
+            stableStatus,
+            turnAttachments
+          )
+        ) {
+          return;
+        }
+      }
 
       if (await handleLocalCommand(state, prompt, stableStatus, turnAttachments)) {
         return;

@@ -293,13 +293,17 @@ export function useWorkbench() {
         setIsSwitchingSession(false);
       }
     },
-    async onPromptSubmit(prompt: string, attachmentIds: string[] = queuedAttachmentIds) {
+    async onPromptSubmit(
+      prompt: string,
+      attachmentIds: string[] = queuedAttachmentIds,
+      options: { jdMcpToolName?: string } = {}
+    ) {
       const trimmed = prompt.trim();
       if (!trimmed || !snapshot.sessionId) {
         return;
       }
 
-      const response = await submitPrompt(snapshot.sessionId, trimmed, attachmentIds);
+      const response = await submitPrompt(snapshot.sessionId, trimmed, attachmentIds, options);
       setSnapshot(response.snapshot);
       setQueuedAttachmentIds([]);
       setSessions((current) =>

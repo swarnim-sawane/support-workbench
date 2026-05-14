@@ -74,14 +74,15 @@ export async function deleteSession(sessionId: string, cwd?: string): Promise<vo
 export async function submitPrompt(
   sessionId: string,
   prompt: string,
-  attachmentIds: string[] = []
+  attachmentIds: string[] = [],
+  options: { jdMcpToolName?: string } = {}
 ): Promise<SnapshotResponse> {
   const response = await fetch(`/api/session/${sessionId}/prompt`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ prompt, attachmentIds })
+    body: JSON.stringify({ prompt, attachmentIds, ...options })
   });
 
   return readJson<SnapshotResponse>(response);

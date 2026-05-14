@@ -24,7 +24,11 @@ type AppProps = {
   queuedAttachmentIds: string[];
   uploadItems?: WorkbenchUploadItem[];
   health: WorkbenchHealth;
-  onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
+  onPromptSubmit: (
+    prompt: string,
+    attachmentIds: string[],
+    options?: { jdMcpToolName?: string }
+  ) => void | Promise<void>;
   onApprove: (requestId: string, decision: 'allow' | 'deny') => void | Promise<void>;
   onAttachFiles: (files: File[]) => void | Promise<void>;
   onRemoveAttachment: (attachmentId: string) => void | Promise<void>;
@@ -207,14 +211,20 @@ export function App({
     URL.revokeObjectURL(url);
   }
 
-  async function handlePromptSubmit(prompt: string, attachmentIds: string[]) {
+  async function handlePromptSubmit(
+    prompt: string,
+    attachmentIds: string[],
+    options: { jdMcpToolName?: string } = {}
+  ) {
     if (isSubmittingPromptRef.current) {
       return;
     }
 
     chatNearBottomRef.current = true;
     isSubmittingPromptRef.current = true;
-    const result = onPromptSubmit(prompt, attachmentIds);
+    const result = options.jdMcpToolName
+      ? onPromptSubmit(prompt, attachmentIds, options)
+      : onPromptSubmit(prompt, attachmentIds);
     if (isPromiseLike(result)) {
       setIsSubmittingPrompt(true);
       try {
@@ -406,6 +416,11 @@ export function App({
                   onPromptSubmit={handlePromptSubmit}
                   onAttachFiles={onAttachFiles}
                   onUnqueueAttachment={onUnqueueAttachment}
+                  availableAttachments={availableAttachments}
+                  jdMcp={snapshot.integrations.jdMcp}
+                  onRunJdMcpTool={({ toolName, label, attachmentIds }) =>
+                    void handlePromptSubmit(label, attachmentIds, { jdMcpToolName: toolName })
+                  }
                   onDragEnterFiles={onDragEnterFiles}
                   onDragLeaveFiles={onDragLeaveFiles}
                   onDragOverFiles={onDragOverFiles}
@@ -436,6 +451,7 @@ export function App({
       <HelpDrawer
         open={helpOpen}
         commands={snapshot.commands}
+        jdMcp={snapshot.integrations.jdMcp}
         onClose={() => setHelpOpen(false)}
       />
       <ReportViewerDrawer

@@ -1,9 +1,11 @@
-import { Command, Keyboard, Sparkles, Upload, X, Zap } from 'lucide-react';
-import type { WorkbenchCommandInfo } from '../types';
+import { Command, Keyboard, Sparkles, Upload, Wrench, X, Zap } from 'lucide-react';
+import { friendlyJdMcpStatus } from '../jdMcpWorkflows';
+import type { WorkbenchCommandInfo, WorkbenchIntegrationSnapshot } from '../types';
 
 type HelpDrawerProps = {
   open: boolean;
   commands: WorkbenchCommandInfo[];
+  jdMcp?: WorkbenchIntegrationSnapshot['jdMcp'];
   onClose: () => void;
 };
 
@@ -14,12 +16,13 @@ const keyboardShortcuts = [
   ['Esc', 'dismiss']
 ];
 
-export function HelpDrawer({ open, commands, onClose }: HelpDrawerProps) {
+export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) {
   if (!open) {
     return null;
   }
 
   const groupedCommands = groupCommands(commands);
+  const jdMcpDescriptors = jdMcp?.toolDescriptors ?? [];
 
   return (
     <div className="help-backdrop" role="presentation" onMouseDown={onClose}>
@@ -86,6 +89,43 @@ export function HelpDrawer({ open, commands, onClose }: HelpDrawerProps) {
               </p>
             </div>
           </section>
+
+          {jdMcp ? (
+            <section className="help-section help-jd-mcp-section" aria-label="JD MCP tools">
+              <div className="help-section-title">
+                <Wrench size={17} aria-hidden="true" />
+                <h3>JD MCP tools</h3>
+              </div>
+              <div className="help-jd-mcp-status">
+                <strong>{friendlyJdMcpStatus(jdMcp)}</strong>
+                <span>{jdMcp.note ?? 'No JD MCP status note is available.'}</span>
+              </div>
+              {jdMcpDescriptors.length ? (
+                <div className="help-tool-list">
+                  {jdMcpDescriptors.map((tool) => {
+                    const unavailable = tool.enabled === false || tool.visibility === 'unsupported';
+                    return (
+                      <article
+                        key={tool.name}
+                        className={`help-tool-row ${unavailable ? 'is-unavailable' : ''}`}
+                      >
+                        <div>
+                          <strong>{tool.name}</strong>
+                          <p>{tool.description}</p>
+                          {tool.reason ? <small>{tool.reason}</small> : null}
+                        </div>
+                        <span>{unavailable ? 'Unavailable' : 'Available'}</span>
+                        {tool.requiresApproval ? <em>requires approval</em> : null}
+                        {tool.producesReports ? <em>HTML report</em> : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="muted-help-copy">No JD MCP tool descriptors are loaded.</p>
+              )}
+            </section>
+          ) : null}
 
           <section className="help-section">
             <div className="help-section-title">

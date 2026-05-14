@@ -2520,6 +2520,106 @@ describe('createEngine', () => {
     expect(engine.getSnapshot(session.id).status).toBe('completed');
   });
 
+  it('prepares guided JD MCP composer invocations with exact attachment payloads', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-guided-jd-mcp-'));
+    const sessionId = 'guided-jd-mcp-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const harPath = join(uploadDir, 'checkout.har');
+    const logPath = join(uploadDir, 'DefaultServer-diagnostic.log');
+    writeFileSync(harPath, JSON.stringify({ log: { entries: [] } }));
+    writeFileSync(logPath, 'ECID=abc123');
+
+    const provider: EngineModelProvider = {
+      healthCheck: vi.fn(async () => ({ ok: true, provider: 'fake', model: 'fake-model' })),
+      sendTurn: vi.fn(async function* () {
+        return;
+      }),
+      cancelTurn: vi.fn(async () => {})
+    };
+    const executeTool = vi.fn(async () => ({
+      summary: 'correlation complete',
+      source: 'jd-mcp' as const
+    }));
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'correlate_har_with_logs',
+          description: 'Correlate a HAR file with server logs.',
+          source: 'jd-mcp',
+          requiresApproval: true,
+          producesReports: false,
+          category: 'diagnostics',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    engine.addAttachment(session.id, {
+      id: 'att-har',
+      originalName: 'checkout.har',
+      storedName: 'checkout.har',
+      mediaType: 'application/json',
+      kind: 'text',
+      localPath: harPath,
+      size: 24,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-05-14T00:00:00.000Z'
+    });
+    engine.addAttachment(session.id, {
+      id: 'att-log',
+      originalName: 'DefaultServer-diagnostic.log',
+      storedName: 'DefaultServer-diagnostic.log',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: logPath,
+      size: 11,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-05-14T00:00:00.000Z'
+    });
+
+    await engine.submitPrompt(session.id, 'Correlate HAR with logs', {
+      attachmentIds: ['att-har', 'att-log'],
+      jdMcpToolName: 'correlate_har_with_logs'
+    });
+
+    expect(provider.sendTurn).not.toHaveBeenCalled();
+    expect(engine.getPendingApprovals(session.id)).toEqual([
+      expect.objectContaining({
+        toolName: 'correlate_har_with_logs',
+        source: 'jd-mcp',
+        input: {
+          har_file_path: harPath,
+          log_folder_path: uploadDir
+        },
+        reasoning: expect.stringContaining('guided composer action')
+      })
+    ]);
+
+    const approval = engine.getPendingApprovals(session.id)[0];
+    await engine.resolveApproval(session.id, approval!.requestId, {
+      decision: 'allow'
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'correlate_har_with_logs',
+        input: {
+          har_file_path: harPath,
+          log_folder_path: uploadDir
+        }
+      })
+    );
+  });
+
   it('surfaces failed /report executions and clears the stale report suggestion', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-command-failure-'));
     const sessionId = 'report-command-failure-session';

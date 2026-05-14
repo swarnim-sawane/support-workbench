@@ -170,12 +170,16 @@ export function createWorkbenchApp(input: {
       const attachmentIds = Array.isArray(req.body?.attachmentIds)
         ? req.body.attachmentIds.filter((value: unknown): value is string => typeof value === 'string')
         : [];
+      const jdMcpToolName =
+        typeof req.body?.jdMcpToolName === 'string' && req.body.jdMcpToolName.trim()
+          ? req.body.jdMcpToolName.trim()
+          : undefined;
       if (!prompt.trim()) {
         res.status(400).json({ error: 'prompt is required' });
         return;
       }
 
-      await input.engine.submitPrompt(req.params.sessionId, prompt, { attachmentIds });
+      await input.engine.submitPrompt(req.params.sessionId, prompt, { attachmentIds, jdMcpToolName });
       res.status(202).json({
         accepted: true,
         snapshot: input.engine.getSnapshot(req.params.sessionId)
