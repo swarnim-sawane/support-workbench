@@ -607,6 +607,7 @@ export type WorkbenchEngine = {
     options?: {
       attachmentIds?: string[];
       ownerId?: string | null;
+      jdMcpToolName?: string;
     }
   ): Promise<void>;
   resolveApproval(

@@ -145,6 +145,20 @@ In normal use:
 - JD MCP tools provide deeper product-specific reports when configured
 - the health pill and runtime trace help show what path was used
 
+The Help drawer lists the JD MCP descriptor catalog reported by the runtime, including disabled tools and prerequisite reasons such as missing JD MCP root, missing Java/JDTOOLS configuration, missing jdtools.jar, or missing FORMS_HOME.
+
+Common guided composer actions include:
+
+- Analyze HAR with \`analyze_har_file\`
+- Correlate HAR with server logs using \`correlate_har_with_logs\`
+- Analyze WebLogic/OHS access logs with \`analyze_access_logs\`
+- Analyze ADF, Forms, or Reports ODL logs with \`analyze_adf_logs\`
+- Analyze thread dumps with \`analyze_thread_dumps\`
+- Translate Forms traces with \`translate_forms_trace\`
+- Pre-scan unknown text diagnostics with \`triage_text_diagnostics\`
+
+Advanced JD MCP tools remain available when their descriptors are enabled, but common support workflows should start from the visible composer actions instead of requiring memorized slash commands.
+
 If a report was not generated, the session should explain whether the analyzer was unavailable, skipped, or not relevant for that source.
 `
   },

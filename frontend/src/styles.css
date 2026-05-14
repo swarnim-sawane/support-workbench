@@ -1139,6 +1139,108 @@ p {
   flex: 0 0 auto;
 }
 
+.composer-jd-mcp-actions {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  border-bottom: 1px solid rgba(123, 143, 160, 0.14);
+  padding: 0 2px 8px;
+}
+
+.composer-jd-mcp-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.composer-jd-mcp-head svg {
+  color: var(--accent);
+}
+
+.composer-jd-mcp-action-list,
+.composer-jd-mcp-advanced-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.composer-jd-mcp-action {
+  display: inline-flex;
+  min-height: 36px;
+  max-width: 210px;
+  flex: 0 1 auto;
+  cursor: pointer;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(13, 122, 111, 0.22);
+  border-radius: 12px;
+  background: rgba(13, 122, 111, 0.07);
+  color: var(--text);
+  padding: 7px 10px;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.composer-jd-mcp-action:hover:not(:disabled),
+.composer-jd-mcp-action:focus-visible {
+  border-color: rgba(13, 122, 111, 0.42);
+  background: rgba(13, 122, 111, 0.12);
+  outline: none;
+}
+
+.composer-jd-mcp-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+
+.composer-jd-mcp-action span,
+.composer-jd-mcp-advanced summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.composer-jd-mcp-action small {
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.composer-jd-mcp-action.compact {
+  max-width: 240px;
+}
+
+.composer-jd-mcp-advanced {
+  flex: 0 1 100%;
+}
+
+.composer-jd-mcp-advanced summary {
+  display: inline-flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 750;
+  list-style: none;
+}
+
+.composer-jd-mcp-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.composer-jd-mcp-advanced[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.composer-jd-mcp-advanced-list {
+  margin-top: 8px;
+}
+
 .upload-progress-panel {
   display: flex;
   flex-direction: column;
@@ -3843,6 +3945,88 @@ body {
 .help-command-list {
   display: grid;
   gap: 10px;
+}
+
+.help-jd-mcp-status {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.help-jd-mcp-status strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.help-jd-mcp-status span,
+.muted-help-copy {
+  color: var(--text-soft);
+  line-height: 1.45;
+}
+
+.help-tool-list {
+  display: grid;
+  gap: 9px;
+}
+
+.help-tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.help-tool-row.is-unavailable {
+  opacity: 0.78;
+}
+
+.help-tool-row strong {
+  display: block;
+  margin-bottom: 4px;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.86rem;
+}
+
+.help-tool-row p,
+.help-tool-row small {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.42;
+}
+
+.help-tool-row small {
+  display: block;
+  margin-top: 6px;
+}
+
+.help-tool-row > span,
+.help-tool-row em {
+  justify-self: end;
+  border: 1px solid rgba(13, 122, 111, 0.16);
+  border-radius: 999px;
+  background: rgba(13, 122, 111, 0.08);
+  color: var(--accent);
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.help-tool-row.is-unavailable > span {
+  border-color: rgba(172, 84, 84, 0.2);
+  background: rgba(172, 84, 84, 0.08);
+  color: #9d3f3f;
+}
+
+.help-tool-row em {
+  grid-column: 2;
+  background: rgba(74, 95, 112, 0.08);
+  color: var(--text-soft);
 }
 
 .help-command-row {

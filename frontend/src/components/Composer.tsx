@@ -1,9 +1,11 @@
 import {
   AlertTriangle,
+  ChevronDown,
   LoaderCircle,
   Paperclip,
   SendHorizonal,
   UploadCloud,
+  Wrench,
   X
 } from 'lucide-react';
 import {
@@ -16,6 +18,11 @@ import {
   type RefObject
 } from 'react';
 import type { WorkbenchAttachment, WorkbenchSessionSnapshot, WorkbenchUploadItem } from '../types';
+import {
+  buildJdMcpComposerActions,
+  getJdMcpToolStatus,
+  type JdMcpComposerAction
+} from '../jdMcpWorkflows';
 import { buildAttachmentStatus, formatBytes } from './utils';
 
 type ComposerProps = {
@@ -25,12 +32,19 @@ type ComposerProps = {
   isSubmitting: boolean;
   isDraggingFiles: boolean;
   uploadItems?: WorkbenchUploadItem[];
+  availableAttachments?: WorkbenchAttachment[];
   queuedAttachments: WorkbenchAttachment[];
   queuedAttachmentIds: string[];
+  jdMcp?: WorkbenchSessionSnapshot['integrations']['jdMcp'];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
   onAttachFiles: (files: File[]) => void | Promise<void>;
   onUnqueueAttachment: (attachmentId: string) => void | Promise<void>;
+  onRunJdMcpTool?: (input: {
+    toolName: string;
+    label: string;
+    attachmentIds: string[];
+  }) => void | Promise<void>;
   onDragEnterFiles: (event: DragEvent) => void;
   onDragLeaveFiles: (event: DragEvent) => void;
   onDragOverFiles: (event: DragEvent) => void;
@@ -46,10 +60,13 @@ export function Composer({
   uploadItems = [],
   queuedAttachments,
   queuedAttachmentIds,
+  availableAttachments = queuedAttachments,
+  jdMcp,
   textareaRef,
   onPromptSubmit,
   onAttachFiles,
   onUnqueueAttachment,
+  onRunJdMcpTool,
   onDragEnterFiles,
   onDragLeaveFiles,
   onDragOverFiles,
@@ -60,6 +77,15 @@ export function Composer({
     (item) => item.stage === 'uploading' || item.stage === 'processing'
   );
   const hasActiveUploadItems = activeUploadItems.length > 0;
+  const jdMcpActions = jdMcp
+    ? buildJdMcpComposerActions({
+        jdMcp,
+        attachments: availableAttachments,
+        queuedAttachmentIds
+      })
+    : null;
+  const visiblePrimaryJdMcpActions = jdMcpActions?.primary.slice(0, 6) ?? [];
+  const enabledAdvancedJdMcpActions = jdMcpActions?.advanced.filter((action) => !action.disabled) ?? [];
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -127,6 +153,14 @@ export function Composer({
             ) : null}
           </div>
         ) : null}
+        {jdMcpActions && (visiblePrimaryJdMcpActions.length || enabledAdvancedJdMcpActions.length) ? (
+          <JdMcpActionStrip
+            primaryActions={visiblePrimaryJdMcpActions}
+            advancedActions={enabledAdvancedJdMcpActions}
+            onRunJdMcpTool={onRunJdMcpTool}
+            disabled={isSubmitting || status === 'running'}
+          />
+        ) : null}
         <div className="composer-input-row">
           <button
             type="button"
@@ -141,7 +175,7 @@ export function Composer({
             className="visually-hidden"
             type="file"
             multiple
-            accept=".zip,.cjs,.conf,.css,.csv,.env,.html,.ini,.java,.js,.json,.jsx,.log,.md,.mjs,.png,.jpg,.jpeg,.gif,.webp,.bmp,.py,.rb,.rs,.scss,.sh,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,application/zip,application/x-zip-compressed,text/*,image/*"
+            accept=".zip,.cjs,.conf,.css,.csv,.dmp,.dump,.env,.har,.html,.ini,.java,.js,.json,.jsx,.log,.md,.mjs,.out,.png,.jpg,.jpeg,.gif,.webp,.bmp,.py,.rb,.rs,.scss,.sh,.sql,.tdump,.toml,.trc,.ts,.tsx,.txt,.xml,.yaml,.yml,application/zip,application/x-zip-compressed,text/*,image/*"
             aria-label="Attach files"
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? []);
@@ -171,6 +205,82 @@ export function Composer({
         </div>
       </div>
     </form>
+  );
+}
+
+function JdMcpActionStrip({
+  primaryActions,
+  advancedActions,
+  disabled,
+  onRunJdMcpTool
+}: {
+  primaryActions: JdMcpComposerAction[];
+  advancedActions: JdMcpComposerAction[];
+  disabled: boolean;
+  onRunJdMcpTool?: (input: {
+    toolName: string;
+    label: string;
+    attachmentIds: string[];
+  }) => void | Promise<void>;
+}) {
+  function runAction(action: JdMcpComposerAction) {
+    if (disabled || action.disabled) {
+      return;
+    }
+
+    void onRunJdMcpTool?.({
+      toolName: action.toolName,
+      label: action.label,
+      attachmentIds: action.attachmentIds
+    });
+  }
+
+  return (
+    <div className="composer-jd-mcp-actions" aria-label="Analyze with JD MCP">
+      <div className="composer-jd-mcp-head">
+        <Wrench size={14} aria-hidden="true" />
+        <span>Analyze with JD MCP</span>
+      </div>
+      <div className="composer-jd-mcp-action-list">
+        {primaryActions.map((action) => (
+          <button
+            key={action.toolName}
+            type="button"
+            className="composer-jd-mcp-action"
+            title={action.disabledReason ?? action.description}
+            disabled={disabled || action.disabled}
+            aria-label={`${action.label} - ${getJdMcpToolStatus(action)}`}
+            onClick={() => runAction(action)}
+          >
+            <span>{action.label}</span>
+            <small>{getJdMcpToolStatus(action)}</small>
+          </button>
+        ))}
+        {advancedActions.length ? (
+          <details className="composer-jd-mcp-advanced">
+            <summary>
+              <ChevronDown size={14} aria-hidden="true" />
+              <span>Advanced JD MCP tools</span>
+            </summary>
+            <div className="composer-jd-mcp-advanced-list">
+              {advancedActions.map((action) => (
+                <button
+                  key={action.toolName}
+                  type="button"
+                  className="composer-jd-mcp-action compact"
+                  title={action.description}
+                  disabled={disabled}
+                  onClick={() => runAction(action)}
+                >
+                  <span>{action.label}</span>
+                  <small>{action.toolName}</small>
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
