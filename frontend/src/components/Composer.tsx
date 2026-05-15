@@ -39,6 +39,7 @@ type ComposerProps = {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
   onAttachFiles: (files: File[]) => void | Promise<void>;
+  onQueueAttachment: (attachmentId: string) => void | Promise<void>;
   onUnqueueAttachment: (attachmentId: string) => void | Promise<void>;
   onRunJdMcpTool?: (input: {
     toolName: string;
@@ -65,6 +66,7 @@ export function Composer({
   textareaRef,
   onPromptSubmit,
   onAttachFiles,
+  onQueueAttachment,
   onUnqueueAttachment,
   onRunJdMcpTool,
   onDragEnterFiles,
@@ -86,6 +88,18 @@ export function Composer({
     : null;
   const visiblePrimaryJdMcpActions = jdMcpActions?.primary.slice(0, 6) ?? [];
   const enabledAdvancedJdMcpActions = jdMcpActions?.advanced.filter((action) => !action.disabled) ?? [];
+  const eligibleAttachments = availableAttachments.filter(
+    (attachment) => attachment.promptVisibility === 'available'
+  );
+  const eligibleAttachmentIds = eligibleAttachments.map((attachment) => attachment.id);
+  const selectedEligibleIds = eligibleAttachmentIds.filter((attachmentId) =>
+    queuedAttachmentIds.includes(attachmentId)
+  );
+  const unselectedEligibleIds = eligibleAttachmentIds.filter(
+    (attachmentId) => !queuedAttachmentIds.includes(attachmentId)
+  );
+  const hasAttachmentSelectionControls = eligibleAttachments.length > 0;
+  const selectedAttachmentSummary = `${selectedEligibleIds.length} of ${eligibleAttachments.length} ${eligibleAttachments.length === 1 ? 'file' : 'files'} selected`;
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -125,6 +139,18 @@ export function Composer({
     void onAttachFiles(files);
   }
 
+  function selectAllAttachments() {
+    for (const attachmentId of unselectedEligibleIds) {
+      void onQueueAttachment(attachmentId);
+    }
+  }
+
+  function deselectAllAttachments() {
+    for (const attachmentId of selectedEligibleIds) {
+      void onUnqueueAttachment(attachmentId);
+    }
+  }
+
   return (
     <form
       className={`composer-shell ${isDraggingFiles ? 'is-dragging-files' : ''}`}
@@ -136,9 +162,35 @@ export function Composer({
     >
       <div className="composer-box">
         {isDraggingFiles ? <div className="drop-target-label">Drop files to attach</div> : null}
-        {hasActiveUploadItems || queuedAttachments.length ? (
+        {hasActiveUploadItems || queuedAttachments.length || hasAttachmentSelectionControls ? (
           <div className={`composer-attachment-tray ${hasActiveUploadItems ? '' : 'is-horizontal'}`}>
             {hasActiveUploadItems ? <UploadProgressPanel items={activeUploadItems} /> : null}
+
+            {hasAttachmentSelectionControls ? (
+              <div className="composer-attachment-controls" aria-label="Chat file selection">
+                <span className="composer-attachment-count">{selectedAttachmentSummary}</span>
+                <div className="composer-attachment-actions">
+                  <button
+                    type="button"
+                    className="composer-attachment-action"
+                    aria-label="Select all eligible chat files"
+                    onClick={selectAllAttachments}
+                    disabled={!unselectedEligibleIds.length}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-attachment-action"
+                    aria-label="Deselect all selected chat files"
+                    onClick={deselectAllAttachments}
+                    disabled={!selectedEligibleIds.length}
+                  >
+                    Deselect all
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {queuedAttachments.length ? (
               <div className="queued-attachments" aria-label="Queued attachments">
