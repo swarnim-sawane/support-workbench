@@ -412,6 +412,7 @@ export function App({
                   textareaRef={composerTextareaRef}
                   onPromptSubmit={handlePromptSubmit}
                   onAttachFiles={onAttachFiles}
+                  onQueueAttachment={onQueueAttachment}
                   onUnqueueAttachment={onUnqueueAttachment}
                   availableAttachments={availableAttachments}
                   jdMcp={snapshot.integrations.jdMcp}
