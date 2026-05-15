@@ -1056,6 +1056,7 @@ p {
 
 .icon-button,
 .send-button,
+.stop-button,
 .secondary-action,
 .permission-action {
   display: inline-flex;
@@ -1065,7 +1066,8 @@ p {
 }
 
 .icon-button,
-.send-button {
+.send-button,
+.stop-button {
   width: 36px;
   height: 36px;
   flex: 0 0 auto;
@@ -1089,6 +1091,15 @@ p {
 
 .send-button:hover:not(:disabled) {
   background: #ffffff;
+}
+
+.stop-button {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.stop-button:hover:not(:disabled) {
+  background: #d94d4d;
 }
 
 .queued-attachments {
@@ -3807,7 +3818,8 @@ body {
   transform: translateY(-1px);
 }
 
-.send-button {
+.send-button,
+.stop-button {
   box-shadow: 0 8px 22px rgba(13, 122, 111, 0.18);
   transition:
     background-color 0.18s ease,
@@ -3815,7 +3827,8 @@ body {
     transform 0.18s ease;
 }
 
-.send-button:hover:not(:disabled) {
+.send-button:hover:not(:disabled),
+.stop-button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 10px 26px rgba(13, 122, 111, 0.22);
 }
@@ -4955,6 +4968,7 @@ body {
   .secondary-action,
   .composer-box,
   .send-button,
+  .stop-button,
   .icon-button,
   .attachment-chip,
   .upload-toast-dismiss {
@@ -5298,6 +5312,17 @@ body {
 [data-theme='dark'] .send-button:hover:not(:disabled) {
   background: var(--accent-hover);
   box-shadow: 0 12px 30px rgba(68, 214, 189, 0.26);
+}
+
+[data-theme='dark'] .stop-button {
+  background: var(--danger);
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgba(255, 123, 123, 0.2);
+}
+
+[data-theme='dark'] .stop-button:hover:not(:disabled) {
+  background: #ff6262;
+  box-shadow: 0 12px 30px rgba(255, 123, 123, 0.26);
 }
 
 [data-theme='dark'] .queued-attachments .attachment-chip,

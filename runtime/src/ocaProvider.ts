@@ -183,6 +183,7 @@ export class OcaModelProvider implements EngineModelProvider {
   private readonly token: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
+  private readonly activeControllers = new Map<string, AbortController>();
 
   constructor(options: OcaProviderOptions = {}) {
     this.baseUrl = options.baseUrl ?? process.env.OCA_BASE_URL;
@@ -278,87 +279,109 @@ export class OcaModelProvider implements EngineModelProvider {
       ...messages.map(toOpenAiMessage)
     ];
 
-    const response = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.token}`
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: payloadMessages,
-        stream: true,
-        temperature: 0.15
-      })
-    });
+    this.activeControllers.get(options.sessionId)?.abort();
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+    this.activeControllers.set(options.sessionId, controller);
 
-    if (!response.ok || !response.body) {
-      throw new Error(`OCA request failed with status ${response.status}`);
-    }
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: this.model,
+          messages: payloadMessages,
+          stream: true,
+          temperature: 0.15
+        })
+      });
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullText = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
+      if (!response.ok || !response.body) {
+        throw new Error(`OCA request failed with status ${response.status}`);
       }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
 
-      for (const line of lines) {
-        if (!line.startsWith('data:')) {
-          continue;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
         }
 
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') {
-          continue;
-        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
 
-        const chunk = JSON.parse(data) as {
-          choices?: Array<{
-            delta?: { content?: string };
-            message?: { content?: string };
-          }>;
+        for (const line of lines) {
+          if (!line.startsWith('data:')) {
+            continue;
+          }
+
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') {
+            continue;
+          }
+
+          const chunk = JSON.parse(data) as {
+            choices?: Array<{
+              delta?: { content?: string };
+              message?: { content?: string };
+            }>;
+          };
+          const text =
+            chunk.choices?.[0]?.delta?.content ??
+            chunk.choices?.[0]?.message?.content ??
+            '';
+
+          if (text) {
+            fullText += text;
+          }
+        }
+      }
+
+      const parsed = parseAssistantResponse(fullText);
+      if (parsed.assistantText) {
+        yield {
+          type: 'assistant_delta',
+          text: parsed.assistantText
         };
-        const text =
-          chunk.choices?.[0]?.delta?.content ??
-          chunk.choices?.[0]?.message?.content ??
-          '';
+      }
 
-        if (text) {
-          fullText += text;
-        }
+      for (const toolCall of parsed.toolCalls) {
+        yield {
+          type: 'tool_call',
+          toolUseId: toolCall.toolUseId,
+          toolName: toolCall.toolName,
+          input: toolCall.input,
+          reasoning: toolCall.reasoning
+        };
+      }
+
+      yield {
+        type: 'assistant_done'
+      };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError' && timedOut) {
+        throw new Error(`OCA request timed out after ${this.requestTimeoutMs} ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (this.activeControllers.get(options.sessionId) === controller) {
+        this.activeControllers.delete(options.sessionId);
       }
     }
-
-    const parsed = parseAssistantResponse(fullText);
-    if (parsed.assistantText) {
-      yield {
-        type: 'assistant_delta',
-        text: parsed.assistantText
-      };
-    }
-
-    for (const toolCall of parsed.toolCalls) {
-      yield {
-        type: 'tool_call',
-        toolUseId: toolCall.toolUseId,
-        toolName: toolCall.toolName,
-        input: toolCall.input,
-        reasoning: toolCall.reasoning
-      };
-    }
-
-    yield {
-      type: 'assistant_done'
-    };
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -380,5 +403,13 @@ export class OcaModelProvider implements EngineModelProvider {
     }
   }
 
-  async cancelTurn(_sessionId: string): Promise<void> {}
+  async cancelTurn(sessionId: string): Promise<void> {
+    const controller = this.activeControllers.get(sessionId);
+    if (!controller) {
+      return;
+    }
+
+    controller.abort();
+    this.activeControllers.delete(sessionId);
+  }
 }

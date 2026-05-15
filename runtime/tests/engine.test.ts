@@ -165,7 +165,6 @@ describe('createEngine', () => {
       },
       async cancelTurn() {}
     };
-
     const engine = createEngine({
       provider,
       executeTool: vi.fn<(...args: never[]) => Promise<EngineToolExecutionResult>>()
@@ -185,6 +184,59 @@ describe('createEngine', () => {
     const completedSnapshot = engine.getSnapshot(session.id);
     expect(completedSnapshot.status).toBe('completed');
     expect(completedSnapshot.session.activeTurnStartedAt).toBeUndefined();
+  });
+
+  it('stops an active assistant turn and ignores late provider output', async () => {
+    let releaseProvider!: () => void;
+    let providerStarted!: () => void;
+    const providerStartedPromise = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    const providerReleasePromise = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        providerStarted();
+        yield {
+          type: 'assistant_delta',
+          text: 'Partial analysis'
+        } satisfies EngineModelEvent;
+        await providerReleasePromise;
+        yield {
+          type: 'assistant_delta',
+          text: ' late output'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      cancelTurn: vi.fn(async () => {
+        releaseProvider();
+      })
+    };
+    const engine = createEngine({
+      provider,
+      executeTool: vi.fn<(...args: never[]) => Promise<EngineToolExecutionResult>>()
+    });
+    const session = engine.createSession({ cwd: process.cwd() });
+
+    const submitPromise = engine.submitPrompt(session.id, 'Run a slow analysis');
+    await providerStartedPromise;
+
+    expect(engine.getSnapshot(session.id).status).toBe('running');
+
+    await engine.cancelTurn(session.id);
+    await submitPromise;
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(provider.cancelTurn).toHaveBeenCalledWith(session.id);
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.messages.map((message) => message.content).join('\n')).toContain('Run stopped by user.');
+    expect(snapshot.messages.map((message) => message.content).join('\n')).not.toContain('late output');
   });
 
   it('emits a permission request and pauses before a mutating tool executes', async () => {

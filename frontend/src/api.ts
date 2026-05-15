@@ -88,6 +88,14 @@ export async function submitPrompt(
   return readJson<SnapshotResponse>(response);
 }
 
+export async function cancelTurn(sessionId: string): Promise<WorkbenchSessionSnapshot> {
+  const response = await fetch(`/api/session/${sessionId}/cancel`, {
+    method: 'POST'
+  });
+  const payload = await readJson<SnapshotResponse>(response);
+  return payload.snapshot;
+}
+
 export async function uploadAttachments(
   sessionId: string,
   files: File[],

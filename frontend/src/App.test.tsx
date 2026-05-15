@@ -1958,6 +1958,71 @@ describe('App', () => {
     expect(main).toHaveAttribute('data-workspace-layout', 'open');
     expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
   });
+
+  it('shows a stop control while the assistant is running', async () => {
+    const user = userEvent.setup();
+    const onCancelTurn = vi.fn();
+
+    renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running'
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: vi.fn(),
+      onApprove: vi.fn(),
+      onAttachFiles: vi.fn(),
+      onRemoveAttachment: vi.fn(),
+      onQueueAttachment: vi.fn(),
+      onUnqueueAttachment: vi.fn(),
+      onCancelTurn
+    });
+
+    const stopButton = screen.getByRole('button', { name: /stop response/i });
+    expect(stopButton).toBeInTheDocument();
+
+    await user.click(stopButton);
+
+    expect(onCancelTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reenables the composer after stopping an in-flight prompt submit', async () => {
+    const user = userEvent.setup();
+    let resolveSubmit!: () => void;
+    const onPromptSubmit = vi.fn(() => new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    const onCancelTurn = vi.fn();
+    const baseProps: ComponentProps<typeof App> = {
+      snapshot: buildInteractiveSnapshot(),
+      health: { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' },
+      queuedAttachmentIds: [],
+      onPromptSubmit,
+      onApprove: vi.fn(),
+      onAttachFiles: vi.fn(),
+      onRemoveAttachment: vi.fn(),
+      onQueueAttachment: vi.fn(),
+      onUnqueueAttachment: vi.fn(),
+      onCancelTurn
+    };
+    const view = render(<App {...baseProps} />);
+
+    await user.type(screen.getByPlaceholderText(/message support workbench/i), 'Analyze this');
+    await user.click(screen.getByRole('button', { name: /send prompt/i }));
+    expect(onPromptSubmit).toHaveBeenCalledTimes(1);
+
+    view.rerender(<App {...baseProps} snapshot={{ ...baseProps.snapshot, status: 'running' }} />);
+    await user.click(screen.getByRole('button', { name: /stop response/i }));
+
+    view.rerender(<App {...baseProps} snapshot={{ ...baseProps.snapshot, status: 'completed' }} />);
+    await user.type(screen.getByPlaceholderText(/message support workbench/i), 'Next prompt');
+
+    expect(screen.getByRole('button', { name: /send prompt/i })).not.toBeDisabled();
+
+    await act(async () => {
+      resolveSubmit();
+    });
+  });
 });
 
 type RenderWorkbenchInput = {
@@ -1975,6 +2040,7 @@ type RenderWorkbenchInput = {
   onNewSession?: ReturnType<typeof vi.fn>;
   onSelectSession?: ReturnType<typeof vi.fn>;
   onDeleteSession?: ReturnType<typeof vi.fn>;
+  onCancelTurn?: ReturnType<typeof vi.fn>;
 };
 
 function renderWorkbench(input: RenderWorkbenchInput) {
@@ -1995,6 +2061,7 @@ function renderWorkbench(input: RenderWorkbenchInput) {
       onNewSession={input.onNewSession}
       onSelectSession={input.onSelectSession}
       onDeleteSession={input.onDeleteSession}
+      onCancelTurn={input.onCancelTurn}
     />
   );
 }

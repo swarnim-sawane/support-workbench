@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
   removeAttachment: vi.fn(),
   resolveApproval: vi.fn(),
   submitPrompt: vi.fn(),
+  cancelTurn: vi.fn(),
   uploadAttachments: vi.fn()
 }));
 
@@ -358,6 +359,44 @@ describe('useWorkbench', () => {
     ]);
     expect(result.current.snapshot.attachments).toEqual([uploadedAttachment]);
     expect(result.current.queuedAttachmentIds).toEqual(['att-uploaded']);
+  });
+
+  it('cancels the active turn and applies the returned snapshot', async () => {
+    const activeSnapshot = {
+      ...buildSnapshot('session-active'),
+      status: 'running' as const
+    };
+    const stoppedSnapshot = {
+      ...buildSnapshot('session-active'),
+      status: 'completed' as const,
+      messages: [
+        {
+          id: 'message-stopped',
+          role: 'system' as const,
+          content: 'Run stopped by user.'
+        }
+      ]
+    };
+    vi.mocked(api.createSession).mockResolvedValueOnce({
+      session: {
+        id: 'session-active',
+        cwd: 'C:/repo',
+        status: 'running'
+      },
+      snapshot: activeSnapshot
+    });
+    vi.mocked(api.cancelTurn).mockResolvedValue(stoppedSnapshot);
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.activeSessionId).toBe('session-active'));
+
+    await act(async () => {
+      await result.current.onCancelTurn();
+    });
+
+    expect(api.cancelTurn).toHaveBeenCalledWith('session-active');
+    expect(result.current.snapshot.status).toBe('completed');
+    expect(result.current.snapshot.messages.at(-1)?.content).toBe('Run stopped by user.');
   });
 });
 

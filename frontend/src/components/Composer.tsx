@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ChevronDown,
+  CircleStop,
   LoaderCircle,
   Paperclip,
   SendHorizonal,
@@ -38,6 +39,7 @@ type ComposerProps = {
   jdMcp?: WorkbenchSessionSnapshot['integrations']['jdMcp'];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
+  onCancelTurn: () => void | Promise<void>;
   onAttachFiles: (files: File[]) => void | Promise<void>;
   onQueueAttachment: (attachmentId: string) => void | Promise<void>;
   onUnqueueAttachment: (attachmentId: string) => void | Promise<void>;
@@ -65,6 +67,7 @@ export function Composer({
   jdMcp,
   textareaRef,
   onPromptSubmit,
+  onCancelTurn,
   onAttachFiles,
   onQueueAttachment,
   onUnqueueAttachment,
@@ -246,14 +249,25 @@ export function Composer({
             placeholder="Message Support Workbench..."
             rows={1}
           />
+        {status === 'running' ? (
+          <button
+            type="button"
+            className="stop-button"
+            aria-label="Stop response"
+            onClick={() => void onCancelTurn()}
+          >
+            <CircleStop size={17} />
+          </button>
+        ) : (
           <button
             type="submit"
             className="send-button"
             aria-label="Send prompt"
-            disabled={!draft.trim() || isSubmitting || status === 'running'}
+            disabled={!draft.trim() || isSubmitting}
           >
             <SendHorizonal size={17} />
           </button>
+        )}
         </div>
       </div>
     </form>

@@ -141,6 +141,35 @@ describe('createWorkbenchApp', () => {
     });
   });
 
+  it('cancels an active turn through the API', async () => {
+    const cancelTurn = vi.fn(async () => {});
+    const engine = {
+      cancelTurn,
+      getSnapshot: vi.fn(() => ({
+        sessionId: 'session-cancel',
+        status: 'completed',
+        messages: [
+          {
+            id: 'message-stopped',
+            role: 'system',
+            content: 'Run stopped by user.'
+          }
+        ]
+      }))
+    };
+    const app = createWorkbenchApp({ engine: engine as unknown as ReturnType<typeof createEngine> });
+
+    const response = await request(app).post('/api/session/session-cancel/cancel').send();
+
+    expect(response.status).toBe(202);
+    expect(cancelTurn).toHaveBeenCalledWith('session-cancel');
+    expect(response.body.snapshot).toMatchObject({
+      sessionId: 'session-cancel',
+      status: 'completed'
+    });
+    expect(response.body.snapshot.messages.at(-1).content).toBe('Run stopped by user.');
+  });
+
   it('exposes command catalog and session history endpoints', async () => {
     const provider: EngineModelProvider = {
       async healthCheck() {

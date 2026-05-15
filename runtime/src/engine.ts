@@ -59,8 +59,14 @@ type PreparedPendingToolCall = PendingToolCall & {
   validationError?: string;
 };
 
-type ToolExecutionOutcome = 'completed' | 'blocked' | 'recoverable_failed';
-type MainToolQueueResult = 'completed' | 'paused' | 'blocked' | 'recoverable_failed';
+type TurnControl = {
+  id: string;
+  cancelRequested: boolean;
+  cancelFinalized: boolean;
+};
+
+type ToolExecutionOutcome = 'completed' | 'blocked' | 'recoverable_failed' | 'cancelled';
+type MainToolQueueResult = 'completed' | 'paused' | 'blocked' | 'recoverable_failed' | 'cancelled';
 
 type AgentState = EngineAgent & {
   modelHistory: EngineModelMessage[];
@@ -77,6 +83,7 @@ const MAX_LOG_SCAN_EVIDENCE_READS = 6;
 const LARGE_LOG_PRESCAN_MIN_BYTES = 1024 * 1024;
 const RECOVERABLE_TOOL_NAMES = new Set(['Grep', 'Glob', 'Read', 'LogScan', 'WebFetch', 'WebSearch']);
 const AGENT_TERMINAL_STATUSES = new Set<EngineAgentStatus>(['completed', 'failed', 'cancelled']);
+const USER_STOPPED_TURN_MESSAGE = 'Run stopped by user.';
 
 type SessionState = {
   ownerId: string | null;
@@ -103,6 +110,7 @@ type SessionState = {
   attachments: EngineAttachment[];
   reportArtifacts: EngineReportArtifact[];
   branch: string | null;
+  activeTurn: TurnControl | null;
 };
 
 function messageId(): string {
@@ -216,7 +224,8 @@ function createSessionState(session: EngineSession, ownerId: string | null): Ses
     toolActivity: [],
     attachments: [],
     reportArtifacts: [],
-    branch: null
+    branch: null,
+    activeTurn: null
   };
 }
 
@@ -290,6 +299,7 @@ function hydrateSessionState(record: PersistedSessionRecord): SessionState {
     attachments: record.attachments ?? [],
     reportArtifacts: record.reports ?? [],
     branch: record.branch,
+    activeTurn: null,
     listeners: new Set()
   };
 }
@@ -1971,6 +1981,69 @@ export function createEngine(input: {
     return systemMessage;
   }
 
+  function startTurnControl(state: SessionState): TurnControl {
+    const turnControl: TurnControl = {
+      id: randomUUID(),
+      cancelRequested: false,
+      cancelFinalized: false
+    };
+    state.activeTurn = turnControl;
+    return turnControl;
+  }
+
+  function clearActiveTurn(state: SessionState, turnControl: TurnControl): void {
+    if (state.activeTurn === turnControl) {
+      state.activeTurn = null;
+    }
+  }
+
+  function markActiveToolActivitiesStopped(state: SessionState): void {
+    const completedAt = new Date().toISOString();
+    const markStopped = (activity: EngineToolActivity): EngineToolActivity =>
+      activity.status === 'running' || activity.status === 'pending'
+        ? {
+            ...activity,
+            status: 'failed',
+            error: USER_STOPPED_TURN_MESSAGE,
+            recoverable: false,
+            completedAt
+          }
+        : activity;
+
+    state.toolActivity = state.toolActivity.map(markStopped);
+    for (const agent of state.agents) {
+      agent.toolActivity = agent.toolActivity.map(markStopped);
+    }
+  }
+
+  function completeCancelledTurn(state: SessionState, turnControl: TurnControl): void {
+    if (turnControl.cancelFinalized) {
+      return;
+    }
+
+    turnControl.cancelRequested = true;
+    turnControl.cancelFinalized = true;
+    finalizeAssistantDraft(state);
+    markActiveToolActivitiesStopped(state);
+    state.pendingApprovals = [];
+    state.pendingToolQueue = [];
+    state.session.status = 'completed';
+
+    const systemMessage = pushSystemMessage(state, USER_STOPPED_TURN_MESSAGE, 'command');
+    emit(state, {
+      type: 'message.system',
+      sessionId: state.session.id,
+      message: systemMessage
+    });
+    emit(state, {
+      type: 'turn.completed',
+      sessionId: state.session.id,
+      status: 'completed'
+    });
+    clearActiveTurn(state, turnControl);
+    persistState(state);
+  }
+
   function buildSnapshot(state: SessionState): EngineSessionSnapshot {
     const integrations = getIntegrationSnapshot(state.session.cwd, toolCatalog);
     return {
@@ -2395,8 +2468,13 @@ export function createEngine(input: {
       recoveryAttempt?: number;
       toolCatalogOverride?: EngineToolDescriptor[];
       validationError?: string;
+      turnControl?: TurnControl;
     } = {}
   ): Promise<ToolExecutionOutcome> {
+    if (options.turnControl?.cancelRequested) {
+      return 'cancelled';
+    }
+
     const toolCatalogForExecution = options.toolCatalogOverride ?? toolCatalog;
     const toolDescriptor = findToolDescriptor(toolCatalogForExecution, toolName);
     const source = toolDescriptor?.source ?? 'builtin';
@@ -2485,6 +2563,10 @@ export function createEngine(input: {
               sessionId: state.session.id
             });
     } catch (error) {
+      if (options.turnControl?.cancelRequested) {
+        return 'cancelled';
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       const completedAt = new Date().toISOString();
       const recoveryAttempt = options.recoveryAttempt ?? 1;
@@ -2607,6 +2689,10 @@ export function createEngine(input: {
       }
       persistState(state);
       return 'blocked';
+    }
+
+    if (options.turnControl?.cancelRequested) {
+      return 'cancelled';
     }
 
     const normalizedSource = result.source ?? source;
@@ -2789,13 +2875,18 @@ export function createEngine(input: {
     state: SessionState,
     queuedCalls: PendingToolCall[],
     recoveryAttempt: number,
-    turnAttachments: EngineAttachment[] = []
+    turnAttachments: EngineAttachment[] = [],
+    turnControl: TurnControl
   ): Promise<MainToolQueueResult> {
     state.pendingToolQueue = [];
     const spawnedAgentIds: string[] = [];
     const preparedCalls = prepareMainToolCalls(queuedCalls, turnAttachments);
 
     for (let index = 0; index < preparedCalls.length; index += 1) {
+      if (turnControl.cancelRequested) {
+        return 'cancelled';
+      }
+
       const call = preparedCalls[index]!;
       const requestId = randomUUID();
       const toolDescriptor = findToolDescriptor(toolCatalog, call.toolName);
@@ -2873,9 +2964,13 @@ export function createEngine(input: {
         {
           reasoning: call.reasoning,
           recoveryAttempt,
-          validationError: call.validationError
+          validationError: call.validationError,
+          turnControl
         }
       );
+      if (executionOutcome === 'cancelled') {
+        return 'cancelled';
+      }
       if (executionOutcome === 'recoverable_failed') {
         return 'recoverable_failed';
       }
@@ -3130,18 +3225,25 @@ export function createEngine(input: {
   async function runTurnLoop(
     state: SessionState,
     options: {
+      turnControl: TurnControl;
       turnAttachments?: EngineAttachment[];
       progressKey?: string;
       explicitReportRouting?: {
         skippedTool: EngineSkippedToolRecord | null;
         reportSuggestion: EngineReportSuggestion;
       } | null;
-    } = {}
+    }
   ): Promise<void> {
     const maxIterations = 8;
     let recoverableFailureCount = 0;
+    const { turnControl } = options;
 
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      if (turnControl.cancelRequested) {
+        completeCancelledTurn(state, turnControl);
+        return;
+      }
+
       state.currentAssistantDraft = '';
       const queuedCalls: PendingToolCall[] = [];
       const shouldBufferAssistantForReport =
@@ -3173,57 +3275,75 @@ export function createEngine(input: {
         persistState(state);
       }
 
-      for await (const event of input.provider.sendTurn(state.modelHistory, {
-        sessionId: state.session.id,
-        cwd: state.session.cwd,
-        systemPrompt: turnSystemPrompt,
-        tools: modelToolCatalog
-      })) {
-        if (event.type === 'assistant_delta') {
-          if (modelProgressId && !modelProgressCompleted) {
-            completeProgress(state, {
-              id: modelProgressId,
-              phase: 'model.thinking',
-              label: 'Analyzing uploaded evidence',
-              detail: modelProgressDetail,
-              attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
-            });
-            modelProgressCompleted = true;
+      try {
+        for await (const event of input.provider.sendTurn(state.modelHistory, {
+          sessionId: state.session.id,
+          cwd: state.session.cwd,
+          systemPrompt: turnSystemPrompt,
+          tools: modelToolCatalog
+        })) {
+          if (turnControl.cancelRequested) {
+            completeCancelledTurn(state, turnControl);
+            return;
           }
-          if (showAttachmentProgress && !answerProgressStarted) {
-            startProgress(state, {
-              id: progressId('answer.preparing', `${options.progressKey ?? state.session.id}:${iteration}`),
-              phase: 'answer.preparing',
-              label: 'Preparing final answer'
-            });
-            answerProgressStarted = true;
-          }
-          state.currentAssistantDraft += event.text;
-          continue;
-        }
 
-        if (event.type === 'assistant_done') {
-          continue;
-        }
-
-        if (event.type === 'tool_call') {
-          if (modelProgressId && !modelProgressCompleted) {
-            completeProgress(state, {
-              id: modelProgressId,
-              phase: 'model.thinking',
-              label: 'Analyzing uploaded evidence',
-              detail: modelProgressDetail,
-              attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
-            });
-            modelProgressCompleted = true;
+          if (event.type === 'assistant_delta') {
+            if (modelProgressId && !modelProgressCompleted) {
+              completeProgress(state, {
+                id: modelProgressId,
+                phase: 'model.thinking',
+                label: 'Analyzing uploaded evidence',
+                detail: modelProgressDetail,
+                attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+              });
+              modelProgressCompleted = true;
+            }
+            if (showAttachmentProgress && !answerProgressStarted) {
+              startProgress(state, {
+                id: progressId('answer.preparing', `${options.progressKey ?? state.session.id}:${iteration}`),
+                phase: 'answer.preparing',
+                label: 'Preparing final answer'
+              });
+              answerProgressStarted = true;
+            }
+            state.currentAssistantDraft += event.text;
+            continue;
           }
-          queuedCalls.push({
-            toolUseId: event.toolUseId ?? randomUUID(),
-            toolName: event.toolName,
-            input: event.input,
-            reasoning: event.reasoning
-          });
+
+          if (event.type === 'assistant_done') {
+            continue;
+          }
+
+          if (event.type === 'tool_call') {
+            if (modelProgressId && !modelProgressCompleted) {
+              completeProgress(state, {
+                id: modelProgressId,
+                phase: 'model.thinking',
+                label: 'Analyzing uploaded evidence',
+                detail: modelProgressDetail,
+                attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+              });
+              modelProgressCompleted = true;
+            }
+            queuedCalls.push({
+              toolUseId: event.toolUseId ?? randomUUID(),
+              toolName: event.toolName,
+              input: event.input,
+              reasoning: event.reasoning
+            });
+          }
         }
+      } catch (error) {
+        if (turnControl.cancelRequested) {
+          completeCancelledTurn(state, turnControl);
+          return;
+        }
+        throw error;
+      }
+
+      if (turnControl.cancelRequested) {
+        completeCancelledTurn(state, turnControl);
+        return;
       }
 
       if (shouldBufferAssistantForReport) {
@@ -3276,6 +3396,7 @@ export function createEngine(input: {
           sessionId: state.session.id,
           status: 'completed'
         });
+        clearActiveTurn(state, turnControl);
         persistState(state);
         return;
       }
@@ -3284,9 +3405,15 @@ export function createEngine(input: {
         state,
         queuedCalls,
         recoverableFailureCount + 1,
-        options.turnAttachments ?? []
+        options.turnAttachments ?? [],
+        turnControl
       );
       if (toolQueueResult === 'paused') {
+        clearActiveTurn(state, turnControl);
+        return;
+      }
+      if (toolQueueResult === 'cancelled') {
+        completeCancelledTurn(state, turnControl);
         return;
       }
       if (toolQueueResult === 'recoverable_failed') {
@@ -3299,6 +3426,7 @@ export function createEngine(input: {
           sessionId: state.session.id,
           status: 'blocked'
         });
+        clearActiveTurn(state, turnControl);
         persistState(state);
         return;
       }
@@ -3936,11 +4064,13 @@ export function createEngine(input: {
       }
       persistState(state);
 
+      const turnControl = startTurnControl(state);
       try {
         await maybeRunLogPreScan(state, prompt, turnAttachments);
 
         await runTurnLoop(state, {
           progressKey,
+          turnControl,
           turnAttachments,
           explicitReportRouting: explicitReportRouting.reportSuggestion?.canRun
             ? {
@@ -3967,6 +4097,14 @@ export function createEngine(input: {
           status: 'blocked'
         });
         persistState(state);
+        return;
+      } finally {
+        if (!turnControl.cancelRequested) {
+          clearActiveTurn(state, turnControl);
+        }
+      }
+
+      if (turnControl.cancelRequested) {
         return;
       }
 
@@ -4036,6 +4174,7 @@ export function createEngine(input: {
         return;
       }
 
+      const turnControl = startTurnControl(state);
       const approvalExecutionOutcome = await completeToolExecution(
         state,
         requestId,
@@ -4045,15 +4184,21 @@ export function createEngine(input: {
         {
           agentId: pending.agentId,
           agentType: pending.agentType,
-          reasoning: pending.reasoning
+          reasoning: pending.reasoning,
+          turnControl
         }
       );
+      if (approvalExecutionOutcome === 'cancelled') {
+        completeCancelledTurn(state, turnControl);
+        return;
+      }
       if (approvalExecutionOutcome !== 'completed') {
         emit(state, {
           type: 'turn.completed',
           sessionId,
           status: 'blocked'
         });
+        clearActiveTurn(state, turnControl);
         persistState(state);
         return;
       }
@@ -4064,13 +4209,24 @@ export function createEngine(input: {
       }
 
       if (state.pendingToolQueue.length) {
-        const queuedResult = await processMainToolQueue(state, [...state.pendingToolQueue], 1);
+        const queuedResult = await processMainToolQueue(
+          state,
+          [...state.pendingToolQueue],
+          1,
+          [],
+          turnControl
+        );
         if (queuedResult === 'paused') {
+          clearActiveTurn(state, turnControl);
+          return;
+        }
+        if (queuedResult === 'cancelled') {
+          completeCancelledTurn(state, turnControl);
           return;
         }
         if (queuedResult === 'recoverable_failed') {
           state.session.status = 'running';
-          await runTurnLoop(state);
+          await runTurnLoop(state, { turnControl });
           return;
         }
         if (queuedResult === 'blocked') {
@@ -4079,6 +4235,7 @@ export function createEngine(input: {
             sessionId,
             status: 'blocked'
           });
+          clearActiveTurn(state, turnControl);
           persistState(state);
           return;
         }
@@ -4091,11 +4248,12 @@ export function createEngine(input: {
           sessionId,
           status: 'completed'
         });
+        clearActiveTurn(state, turnControl);
         persistState(state);
         return;
       }
       state.session.status = 'running';
-      await runTurnLoop(state);
+      await runTurnLoop(state, { turnControl });
     },
 
     addAttachment(sessionId, attachment, ownerId) {
@@ -4208,8 +4366,21 @@ export function createEngine(input: {
       return input.provider.healthCheck();
     },
 
-    cancelTurn(sessionId) {
-      return input.provider.cancelTurn(sessionId);
+    async cancelTurn(sessionId) {
+      const state = getSessionState(sessionId);
+      const turnControl = state.activeTurn;
+      if (!turnControl) {
+        await input.provider.cancelTurn(sessionId);
+        return;
+      }
+
+      turnControl.cancelRequested = true;
+      try {
+        await input.provider.cancelTurn(sessionId);
+      } catch {
+        // The local session still needs to unblock even if the transport is already closed.
+      }
+      completeCancelledTurn(state, turnControl);
     }
   };
 }
