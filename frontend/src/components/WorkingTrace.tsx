@@ -42,21 +42,28 @@ export function WorkingTrace({
     return null;
   }
 
+  const visibleLabel = active ? buildActiveShimmerLabel(trace, isBooting) : trace.summary;
+  const elapsedLabel = buildElapsedSummary(active, elapsed);
+
   return (
     <details
-      className="working-trace"
+      className={`working-trace assistant-activity-row ${active ? 'is-active' : 'is-complete'} ${active ? 'working-thinking-line' : ''}`}
       role="status"
       aria-live="polite"
       aria-label={trace.summary}
-      open
+      open={active}
     >
       <summary className="working-summary">
-        <span className="working-loader" aria-hidden="true">
-          {active ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+        <span className="assistant-activity-avatar" aria-hidden="true">
+          <span className="working-loader">
+            {active ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}
+          </span>
         </span>
         <span className="working-summary-copy">
-          <strong>{trace.summary}</strong>
-          <span>{buildElapsedSummary(active, elapsed)}</span>
+          <strong key={visibleLabel} className={active ? 'light-sweep-text' : undefined}>
+            {visibleLabel}
+          </strong>
+          <span>{elapsedLabel}</span>
         </span>
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </summary>
@@ -168,7 +175,7 @@ function buildObservableTrace(
     const steps = compactSteps([currentStep, ...completedProgressSteps, ...completedToolSteps]).slice(0, 5);
 
     return {
-      summary: runningProgress ? runningProgress.label : currentStep.text,
+      summary: currentStep.text,
       steps
     };
   }
@@ -186,7 +193,7 @@ function buildObservableTrace(
   }
 
   if (input.showThinking || snapshot.status === 'running') {
-    const text = input.label ?? 'Preparing answer';
+    const text = input.label ?? buildFallbackProgressLabel(snapshot);
     return { summary: text, steps: [{ text, kind: 'active' }] };
   }
 
@@ -240,6 +247,36 @@ function buildRunningToolStep(activities: WorkbenchToolActivity[]): ObservableSt
     ),
     kind: 'active'
   };
+}
+
+function buildActiveShimmerLabel(
+  trace: { summary: string; steps: ObservableStep[] },
+  isBooting: boolean
+): string {
+  if (isBooting) {
+    return trace.summary;
+  }
+
+  const activeStep = trace.steps.find((step) => step.kind === 'active')?.text ?? trace.summary;
+  return activeStep === 'Preparing answer' || activeStep === 'Thinking'
+    ? 'Planning the next diagnostic step'
+    : activeStep;
+}
+
+function buildFallbackProgressLabel(snapshot: WorkbenchSessionSnapshot): string {
+  const availableFiles = snapshot.attachments.filter(
+    (attachment) => attachment.promptVisibility === 'available'
+  );
+
+  if (availableFiles.length > 1) {
+    return `Planning how to inspect ${availableFiles.length} files`;
+  }
+
+  if (availableFiles.length === 1) {
+    return `Planning how to inspect ${availableFiles[0].originalName}`;
+  }
+
+  return 'Planning the next diagnostic step';
 }
 
 function buildCompletedToolSteps(activities: WorkbenchToolActivity[]): ObservableStep[] {

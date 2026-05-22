@@ -4,123 +4,118 @@ export type JdMcpComposerAction = {
   label: string;
   toolName: string;
   description: string;
+  group: JdMcpWorkflowGroup;
   attachmentIds: string[];
-  primary: boolean;
   disabled: boolean;
   disabledReason?: string;
+  producesReports: boolean;
+  requiresApproval: boolean;
 };
 
 export type JdMcpComposerActions = {
-  primary: JdMcpComposerAction[];
-  advanced: JdMcpComposerAction[];
+  available: JdMcpComposerAction[];
+  unavailable: JdMcpComposerAction[];
 };
+
+export type JdMcpWorkflowGroup =
+  | 'Logs'
+  | 'ADF'
+  | 'Forms/Reports'
+  | 'Dumps'
+  | 'Workspace/Incident';
 
 type WorkflowDefinition = {
   label: string;
   toolName: string;
   description: string;
-  primary: boolean;
+  group: JdMcpWorkflowGroup;
   matcher: (attachments: WorkbenchAttachment[]) => WorkbenchAttachment[];
 };
 
 export const JD_MCP_WORKFLOW_DEFINITIONS: WorkflowDefinition[] = [
   {
-    label: 'Correlate HAR with logs',
-    toolName: 'correlate_har_with_logs',
-    description: 'Match HAR requests to ADF or WebLogic log evidence by ECID.',
-    primary: true,
-    matcher: (attachments) => takeFirstEach(attachments, isHarAttachment, isServerLogAttachment)
-  },
-  {
-    label: 'Analyze HAR',
-    toolName: 'analyze_har_file',
-    description: 'Inspect browser timing, failed requests, cache issues, and Oracle product hints.',
-    primary: true,
-    matcher: (attachments) => takeFirst(attachments, isHarAttachment)
-  },
-  {
-    label: 'Analyze access logs',
+    label: 'Access logs',
     toolName: 'analyze_access_logs',
     description: 'Review WebLogic or OHS access logs for errors, slow requests, and status patterns.',
-    primary: true,
-    matcher: (attachments) => takeFirst(attachments, isAccessLogAttachment)
+    group: 'Logs',
+    matcher: (attachments) => takeAll(attachments, isAccessLogAttachment)
   },
   {
-    label: 'Analyze ADF diagnostic logs',
+    label: 'ADF diagnostic logs',
     toolName: 'analyze_adf_logs',
-    description: 'Generate the full JD MCP ADF, Forms, or Reports ODL diagnostic review.',
-    primary: true,
-    matcher: (attachments) => takeFirst(attachments, isDiagnosticLogAttachment)
+    description: 'Generate the full ADF, Forms, or Reports ODL diagnostic review.',
+    group: 'ADF',
+    matcher: (attachments) => takeAll(attachments, isDiagnosticLogAttachment)
   },
   {
-    label: 'Analyze thread dumps',
+    label: 'Thread dumps',
     toolName: 'analyze_thread_dumps',
     description: 'Check thread dumps or dump bundles for locks, stuck threads, and error clusters.',
-    primary: true,
+    group: 'Dumps',
     matcher: (attachments) => takeFirst(attachments, isThreadDumpAttachment)
   },
   {
-    label: 'Forms trace workflow',
+    label: 'Forms trace HTML',
     toolName: 'translate_forms_trace',
     description: 'Translate a Forms .trc file into an HTML trace report.',
-    primary: true,
+    group: 'Forms/Reports',
     matcher: (attachments) => takeFirst(attachments, isFormsTraceAttachment)
   },
   {
-    label: 'Review Forms trace dumps',
+    label: 'Forms trace dumps',
     toolName: 'review_forms_traces',
     description: 'Analyze frmweb_dump_* files for Forms runtime errors and locations.',
-    primary: false,
+    group: 'Forms/Reports',
     matcher: (attachments) => takeFirst(attachments, isFormsDumpAttachment)
   },
   {
-    label: 'Pre-scan text diagnostics',
-    toolName: 'triage_text_diagnostics',
-    description: 'Quickly classify unknown logs and choose the next analyzer.',
-    primary: false,
-    matcher: (attachments) => takeFirst(attachments, isLogLikeAttachment)
-  },
-  {
-    label: 'Read/group ODL logs',
+    label: 'ODL grouped logs',
     toolName: 'read_logs',
     description: 'Group ODL logs by none, app, or ECID before deeper analysis.',
-    primary: false,
-    matcher: (attachments) => takeFirst(attachments, isDiagnosticLogAttachment)
+    group: 'Logs',
+    matcher: (attachments) => takeAll(attachments, isDiagnosticLogAttachment)
   },
   {
-    label: 'Analyze ADF performance logs',
+    label: 'ADF performance logs',
     toolName: 'analyze_adf_perf',
     description: 'Build a request timing hierarchy from ADF diagnostics at CONFIG level.',
-    primary: false,
+    group: 'ADF',
+    matcher: (attachments) => takeAll(attachments, isDiagnosticLogAttachment)
+  },
+  {
+    label: 'JBO activity',
+    toolName: 'review_jbo_activity',
+    description: 'Generate a JBO and ADF BC activity report from diagnostic logs.',
+    group: 'ADF',
     matcher: (attachments) => takeFirst(attachments, isDiagnosticLogAttachment)
   },
   {
-    label: 'Analyze workspace',
+    label: 'JDeveloper workspace',
     toolName: 'analyze_workspace',
     description: 'Inspect an extracted JDeveloper workspace or project bundle.',
-    primary: false,
+    group: 'Workspace/Incident',
     matcher: (attachments) => takeFirst(attachments, isWorkspaceAttachment)
   },
   {
-    label: 'Check HA compliance',
-    toolName: 'check_ha_compliance',
-    description: 'Check ADF clustering and high availability compliance.',
-    primary: false,
-    matcher: (attachments) => takeFirst(attachments, isWorkspaceAttachment)
-  },
-  {
-    label: 'Analyze ADR incident',
+    label: 'ADR incident folder',
     toolName: 'analyze_incident',
     description: 'Inspect an Oracle ADR incident folder.',
-    primary: false,
+    group: 'Workspace/Incident',
     matcher: (attachments) => takeFirst(attachments, isIncidentAttachment)
   },
   {
-    label: 'Analyze JVM Controller logs',
-    toolName: 'analyze_jvm_logs',
-    description: 'Review Oracle Forms JVM Controller logs.',
-    primary: false,
-    matcher: (attachments) => takeFirst(attachments, isLogLikeAttachment)
+    label: 'JDBC leak dump',
+    toolName: 'analyze_jdbc_leaks',
+    description: 'Analyze JDBC profiling dumps to identify connection leak causes.',
+    group: 'ADF',
+    matcher: (attachments) => takeFirst(attachments, isJdbcLeakAttachment)
+  },
+  {
+    label: 'ViewExpired logs',
+    toolName: 'analyze_view_expired',
+    description: 'Analyze ViewExpired exceptions from ADF logs.',
+    group: 'ADF',
+    matcher: (attachments) => takeAll(attachments, isDiagnosticLogAttachment)
   }
 ];
 
@@ -138,39 +133,43 @@ export function buildJdMcpComposerActions(input: {
   const candidates = queued.length ? queued : availableAttachments;
   const descriptors = new Map(input.jdMcp.toolDescriptors.map((tool) => [tool.name, tool]));
 
-  const actions = JD_MCP_WORKFLOW_DEFINITIONS.map((definition) => {
+  const actions = JD_MCP_WORKFLOW_DEFINITIONS.flatMap((definition) => {
     const descriptor = descriptors.get(definition.toolName);
+    if (
+      !descriptor ||
+      descriptor.producesReports !== true ||
+      descriptor.stability !== 'stable' ||
+      descriptor.visibility === 'hidden'
+    ) {
+      return [];
+    }
+
     const matches = definition.matcher(candidates);
     const descriptorReason =
       descriptor && (descriptor.enabled === false || descriptor.visibility === 'unsupported')
         ? descriptor.reason ?? 'Tool is unavailable in this session.'
         : undefined;
     const disabledReason = descriptorReason
-      ?? (!descriptor ? 'Tool is not present in the current JD MCP catalog.' : undefined)
       ?? (!matches.length ? 'Attach a matching diagnostic file first.' : undefined);
 
-    return {
+    const action: JdMcpComposerAction = {
       label: definition.label,
       toolName: definition.toolName,
       description: definition.description,
+      group: definition.group,
       attachmentIds: matches.map((attachment) => attachment.id),
-      primary: definition.primary,
       disabled: Boolean(disabledReason),
-      disabledReason
-    } satisfies JdMcpComposerAction;
+      disabledReason,
+      producesReports: descriptor.producesReports === true,
+      requiresApproval: descriptor.requiresApproval
+    };
+
+    return [action];
   });
 
   return {
-    primary: actions.filter(
-      (action) =>
-        action.primary &&
-        action.disabledReason !== 'Tool is not present in the current JD MCP catalog.'
-    ),
-    advanced: actions.filter(
-      (action) =>
-        !action.primary &&
-        action.disabledReason !== 'Tool is not present in the current JD MCP catalog.'
-    )
+    available: actions.filter((action) => !action.disabled),
+    unavailable: actions.filter((action) => action.disabled)
   };
 }
 
@@ -199,21 +198,11 @@ function takeFirst(
   return match ? [match] : [];
 }
 
-function takeFirstEach(
+function takeAll(
   attachments: WorkbenchAttachment[],
-  ...predicates: Array<(attachment: WorkbenchAttachment) => boolean>
+  predicate: (attachment: WorkbenchAttachment) => boolean
 ): WorkbenchAttachment[] {
-  const matches: WorkbenchAttachment[] = [];
-  for (const predicate of predicates) {
-    const match = attachments.find(
-      (attachment) => predicate(attachment) && !matches.some((item) => item.id === attachment.id)
-    );
-    if (!match) {
-      return [];
-    }
-    matches.push(match);
-  }
-  return matches;
+  return attachments.filter(predicate);
 }
 
 function lookupText(attachment: WorkbenchAttachment): string {
@@ -229,28 +218,19 @@ function extension(attachment: WorkbenchAttachment): string {
   return match?.[0] ?? '';
 }
 
-function isHarAttachment(attachment: WorkbenchAttachment): boolean {
-  return extension(attachment) === '.har';
-}
-
 function isAccessLogAttachment(attachment: WorkbenchAttachment): boolean {
-  return /\baccess[^\\/]*\.(log|txt|out)/i.test(lookupText(attachment));
-}
-
-function isServerLogAttachment(attachment: WorkbenchAttachment): boolean {
-  return isAccessLogAttachment(attachment) || isDiagnosticLogAttachment(attachment);
+  return /(^|[_\-.])access[^\\/]*\.(log|txt|out)/i.test(lookupText(attachment));
 }
 
 function isDiagnosticLogAttachment(attachment: WorkbenchAttachment): boolean {
   const text = lookupText(attachment);
+  if (/(^|[_\-.])(access|catalina|repojvm|jvm|gc|thread|javacore)([_\-.]|$)/i.test(text)) {
+    return false;
+  }
   return (
     ['.log', '.out', '.txt'].includes(extension(attachment)) &&
-    /(diagnostic|defaultserver|server|adf|weblogic|wls|ohs|forms|reports|catalina)/i.test(text)
+    /(^|[_\-.])(diagnostic|odl)([_\-.]|$)|defaultserver-diagnostic|adf-diagnostic|wls-diagnostic/i.test(text)
   );
-}
-
-function isLogLikeAttachment(attachment: WorkbenchAttachment): boolean {
-  return ['.log', '.out', '.txt'].includes(extension(attachment));
 }
 
 function isThreadDumpAttachment(attachment: WorkbenchAttachment): boolean {
@@ -274,4 +254,8 @@ function isWorkspaceAttachment(attachment: WorkbenchAttachment): boolean {
 
 function isIncidentAttachment(attachment: WorkbenchAttachment): boolean {
   return /(incident|adr|diag)/i.test(lookupText(attachment));
+}
+
+function isJdbcLeakAttachment(attachment: WorkbenchAttachment): boolean {
+  return /(jdbc|leak|connection|profile)/i.test(lookupText(attachment));
 }

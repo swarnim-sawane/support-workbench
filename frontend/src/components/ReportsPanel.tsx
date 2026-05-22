@@ -1,6 +1,12 @@
 import { ExternalLink, FileText, Info } from 'lucide-react';
 import type { WorkbenchReportArtifact, WorkbenchSessionSnapshot } from '../types';
-import { buildReportPath, buildReportSuggestionTitle, formatBytes } from './utils';
+import {
+  buildReportPath,
+  buildReportSuggestionTitle,
+  formatBytes,
+  formatSpecializedToolText,
+  formatToolSource
+} from './utils';
 
 type ReportsPanelProps = {
   sessionId: string;
@@ -47,7 +53,7 @@ export function ReportsPanel({
                   <span>
                     <strong>{artifact.title}</strong>
                     <small>
-                      {artifact.toolName} - {artifact.source} - {formatBytes(artifact.size)}
+                      {artifact.toolName} - {formatToolSource(artifact.source)} - {formatBytes(artifact.size)}
                     </small>
                   </span>
                   <ExternalLink size={14} />
@@ -69,7 +75,7 @@ export function ReportsPanel({
           <Info size={17} />
           <div>
             <strong>{buildReportSuggestionTitle(reportSuggestion)}</strong>
-            <p>{reportSuggestion.explanation}</p>
+            <p>{formatSpecializedToolText(reportSuggestion.explanation)}</p>
             <small>Recommended tool: {reportSuggestion.suggestedToolName}</small>
             {reportSuggestion.canRun ? (
               <button
@@ -77,7 +83,7 @@ export function ReportsPanel({
                 className="secondary-action"
                 onClick={() => void onPromptSubmit('/report', reportSuggestion.attachmentIds)}
               >
-                Run jd-mcp report anyway
+                Run specialized report anyway
               </button>
             ) : null}
           </div>

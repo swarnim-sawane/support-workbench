@@ -1,9 +1,12 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'node:fs';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { WorkbenchSessionSnapshot, WorkbenchUploadItem } from './types';
+
+const stylesCss = readFileSync('src/styles.css', 'utf8');
 
 describe('App', () => {
   afterEach(() => {
@@ -107,7 +110,7 @@ describe('App', () => {
           producesReports: true,
           status: 'completed',
           input: { log_folder: 'C:/repo/logs' },
-          summary: 'Generated 1 jd-mcp HTML report artifact',
+          summary: 'Generated 1 specialized HTML report artifact',
           artifacts: [
             {
               id: 'report-1',
@@ -177,13 +180,13 @@ describe('App', () => {
         jdMcp: {
           available: true,
           connected: true,
-          note: 'Connected to jd-mcp',
+          note: 'Connected to specialized tools',
           tools: ['analyze_adf_logs', 'list_directory', 'translate_forms_trace'],
           categories: ['reports', 'helpers'],
           toolDescriptors: [
             {
               name: 'analyze_adf_logs',
-              description: 'Analyze ADF logs through jd-mcp.',
+              description: 'Analyze ADF logs through specialized tools.',
               source: 'jd-mcp',
               requiresApproval: true,
               category: 'reports',
@@ -242,7 +245,7 @@ describe('App', () => {
     render(
       <App
         snapshot={snapshot}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={['att-1']}
         onPromptSubmit={onPromptSubmit}
         onApprove={onApprove}
@@ -268,7 +271,6 @@ describe('App', () => {
     expect(screen.getByText(/permission request/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /do you want to allow write/i })).toBeInTheDocument();
     expect(screen.getByText(/ran 1 tool/i)).toBeInTheDocument();
-    expect(screen.getByText(/created 1 report/i)).toBeInTheDocument();
     expect(screen.getByText(/Map parity gaps/)).toBeInTheDocument();
     expect(screen.getByText('Unknown slash command /commads. Did you mean /commands?')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /deep analysis/i })).toBeInTheDocument();
@@ -281,21 +283,23 @@ describe('App', () => {
     expect(screen.getByText('I inspected the repo structure.')).toBeInTheDocument();
     expect(screen.getByText('ADF Log Review')).toBeInTheDocument();
     expect(screen.getAllByText(/analyze_adf_logs/i).length).toBeGreaterThan(0);
+    const inlineReport = screen.getByRole('article', { name: /html report adf log review/i });
+    expect(within(inlineReport).getByTitle('ADF Log Review')).toHaveAttribute(
+      'src',
+      '/api/session/session-1/reports/report-1/content'
+    );
     const rail = screen.getByRole('complementary', { name: /session history/i });
     expect(within(rail).queryByRole('button', { name: /integrations/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /subagents/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /tool activity/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /reports/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /queued files/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/Generated 1 jd-mcp HTML report artifact/i)).toBeInTheDocument();
+    expect(screen.getByText(/Generated 1 specialized HTML report artifact/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /deny write/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /allow write/i }));
 
     expect(onApprove).toHaveBeenCalledWith('req-1', 'allow');
-
-    fireEvent.click(screen.getByRole('button', { name: /adf log review/i }));
-    expect(screen.getByRole('complementary', { name: /report viewer/i })).toBeInTheDocument();
-    expect(screen.getByTitle('ADF Log Review')).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: /report viewer/i })).not.toBeInTheDocument();
 
     await userEvent.upload(
       screen.getByLabelText(/attach files/i),
@@ -303,10 +307,10 @@ describe('App', () => {
     );
     expect(onAttachFiles).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /remove queued attachment trace\.log/i }));
+    fireEvent.click(screen.getByRole('button', { name: /remove trace\.log from current message/i }));
     expect(onUnqueueAttachment).toHaveBeenCalledWith('att-1');
 
-    fireEvent.click(screen.getByRole('button', { name: /queue error\.png/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add error\.png to chat/i }));
     expect(onQueueAttachment).toHaveBeenCalledWith('att-2');
 
     fireEvent.change(screen.getByPlaceholderText(/message support workbench/i), {
@@ -374,13 +378,13 @@ describe('App', () => {
         jdMcp: {
           available: true,
           connected: true,
-          note: 'Connected to jd-mcp',
+          note: 'Connected to specialized tools',
           tools: ['analyze_adf_logs'],
           categories: ['reports'],
           toolDescriptors: [
             {
               name: 'analyze_adf_logs',
-              description: 'Analyze ADF logs through jd-mcp.',
+              description: 'Analyze ADF logs through specialized tools.',
               source: 'jd-mcp',
               requiresApproval: true,
               category: 'reports',
@@ -417,7 +421,7 @@ describe('App', () => {
     render(
       <App
         snapshot={snapshot}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={onPromptSubmit}
         onApprove={onApprove}
@@ -431,7 +435,7 @@ describe('App', () => {
     expect(screen.getByText(/why no report\?/i)).toBeInTheDocument();
     expect(screen.getByText(/better answer for a single attached log/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run jd-mcp report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
@@ -470,7 +474,7 @@ describe('App', () => {
     expect(screen.getByText(/why no report\?/i)).toBeInTheDocument();
     expect(screen.getByText(/better answer for a single attached log/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run jd-mcp report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-1']);
   });
@@ -549,14 +553,14 @@ describe('App', () => {
         },
         reasonCode: 'explicit_tool_request_not_honored',
         explanation:
-          'analyze_adf_logs was requested but no jd-mcp HTML report was generated. Direct analysis was used as a fallback.'
+          'analyze_adf_logs was requested but no specialized HTML report was generated. Direct analysis was used as a fallback.'
       }
     } as unknown as WorkbenchSessionSnapshot & Record<string, unknown>;
 
     render(
       <App
         snapshot={snapshot}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={onPromptSubmit}
         onApprove={onApprove}
@@ -570,7 +574,7 @@ describe('App', () => {
     expect(screen.getByText('Direct analysis fallback used')).toBeInTheDocument();
     expect(screen.queryByText(/why no report\?/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run jd-mcp report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
@@ -618,7 +622,10 @@ describe('App', () => {
       onUnqueueAttachment: noop
     });
 
-    expect(screen.getByText('Analyzing uploaded evidence - 3 files selected')).toBeInTheDocument();
+    const activeTrace = screen.getByRole('status', { name: /analyzing uploaded evidence/i });
+    expect(activeTrace).toHaveClass('working-thinking-line');
+    expect(within(activeTrace).getAllByText('Analyzing uploaded evidence - 3 files selected').length).toBeGreaterThan(0);
+    expect(within(activeTrace).queryByText(/^Thinking$/)).not.toBeInTheDocument();
     expect(screen.getByText('Classifying uploaded files - 2 logs, 1 text file')).toBeInTheDocument();
     expect(screen.queryByText('Preparing answer')).not.toBeInTheDocument();
   });
@@ -665,11 +672,12 @@ describe('App', () => {
     expect(
       screen.getByRole('status', { name: /analyzing uploaded evidence/i })
     ).toBeInTheDocument();
-    expect(screen.getByText('Analyzing uploaded evidence - 8 files selected')).toBeInTheDocument();
+    expect(screen.getAllByText('Analyzing uploaded evidence - 8 files selected').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Thinking$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/drop a file, ask a question/i)).not.toBeInTheDocument();
   });
 
-  it('keeps terminal processing state visible after a blocked or completed turn', () => {
+  it('keeps blocked processing visible without adding a completed system card', () => {
     const noop = vi.fn();
     const blockedSnapshot = {
       ...buildInteractiveSnapshot(),
@@ -742,7 +750,7 @@ describe('App', () => {
             summary: 'Correlated access and catalina logs'
           }))
         }}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={noop}
         onApprove={noop}
@@ -753,8 +761,110 @@ describe('App', () => {
       />
     );
 
-    expect(screen.getByRole('status', { name: /analysis complete/i })).toBeInTheDocument();
-    expect(screen.getByText(/Root cause: the managed server returned HTTP 500/i)).toBeInTheDocument();
+    const finalAnswer = screen
+      .getByText(/Root cause: the managed server returned HTTP 500/i)
+      .closest('.message-row');
+    expect(finalAnswer).not.toBeNull();
+    expect(screen.queryByRole('status', { name: /analysis complete/i })).not.toBeInTheDocument();
+
+    const completedToolGroup = screen.getByText(/^Ran 1 tool$/i).closest('details');
+    expect(completedToolGroup).not.toBeNull();
+    expect(completedToolGroup?.compareDocumentPosition(finalAnswer as Element)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it('collapses completed assistant activity into compact transcript rows without a working card', () => {
+    const noop = vi.fn();
+    const { container } = renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(screen.queryByRole('status', { name: /analysis complete/i })).not.toBeInTheDocument();
+    const assistantAnswer = screen.getByText('Analysis complete.').closest('.message-row');
+    expect(assistantAnswer).not.toBeNull();
+
+    const completedToolGroup = screen.getByText(/^Ran 1 tool$/i).closest('details');
+    expect(completedToolGroup).not.toBeNull();
+    expect(completedToolGroup).not.toHaveAttribute('open');
+    expect(completedToolGroup?.compareDocumentPosition(assistantAnswer as Element)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+
+    const completedToolRows = container.querySelectorAll(
+      'details.runtime-detail-row.is-settled:not([open])'
+    );
+    expect(completedToolRows.length).toBeGreaterThan(0);
+  });
+
+  it('keeps active assistant activity expanded while a tool is running', () => {
+    const noop = vi.fn();
+    const { container } = renderWorkbench({
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        status: 'running',
+        messages: [
+          {
+            id: 'user-active-tool',
+            role: 'user',
+            content: 'Inspect this uploaded trace'
+          }
+        ],
+        tasks: [],
+        memory: {
+          entries: []
+        },
+        history: {
+          summaries: []
+        },
+        agents: [],
+        reports: {
+          artifacts: []
+        },
+        progressActivity: [],
+        toolActivity: [
+          {
+            requestId: 'req-active-read',
+            toolUseId: 'tool-active-read',
+            toolName: 'Read',
+            source: 'builtin',
+            status: 'running',
+            input: {
+              file_path: 'C:/repo/.claude-oca/uploads/session-1/server-diagnostic.log'
+            },
+            startedAt: '2026-04-24T00:00:04.000Z'
+          }
+        ],
+        reportSuggestion: null
+      },
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const activeTrace = screen.getByRole('status', { name: /^reading server-diagnostic\.log$/i });
+    expect(activeTrace).toHaveClass('working-thinking-line');
+    expect(within(activeTrace).getAllByText('Reading server-diagnostic.log').length).toBeGreaterThan(0);
+    expect(within(activeTrace).queryByText(/^Thinking$/)).not.toBeInTheDocument();
+
+    const activeToolGroup = screen.getByRole('status', {
+      name: /reading server-diagnostic\.log\. inspecting uploaded evidence/i
+    });
+    expect(activeToolGroup).toHaveClass('transcript-event-line', 'tone-active');
+
+    const activeToolRow = container.querySelector('details.runtime-detail-row.is-active[open]');
+    expect(activeToolRow).toBeNull();
   });
 
   it('uses human readable Codex-style labels for active file inspection', () => {
@@ -854,150 +964,17 @@ describe('App', () => {
       onUnqueueAttachment: noop
     });
 
-    expect(
-      screen.getByRole('status', { name: /analyzing uploaded evidence/i })
-    ).toBeInTheDocument();
+    const activeTrace = screen
+      .getAllByRole('status', { name: /reading AVBCS-41519_vm2_catalina_new\.log/i })
+      .find((element) => element.classList.contains('working-thinking-line'));
+    expect(activeTrace).toBeDefined();
+    expect(within(activeTrace as HTMLElement).getAllByText(/Reading AVBCS-41519_vm2_catalina_new\.log/i).length).toBeGreaterThan(0);
+    expect(within(activeTrace as HTMLElement).queryByText(/^Thinking$/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Reading AVBCS-41519_vm2_catalina_new\.log/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Read 2 files/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Searched uploaded logs/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Searched uploaded logs/i)).toBeInTheDocument();
     expect(screen.queryByText(/^Running Read$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Running Grep$/i)).not.toBeInTheDocument();
-  });
-
-  it('renders a case evidence ledger with inferred log groups and LogScan coverage', async () => {
-    const user = userEvent.setup();
-    const noop = vi.fn();
-    const snapshot = {
-      ...buildInteractiveSnapshot(),
-      attachments: [
-        buildTextAttachment('att-old-access', 'vm1_access_old.log'),
-        buildTextAttachment('att-new-access', 'vm1_access_new.log'),
-        buildTextAttachment('att-catalina', 'vm2_catalina_new.log'),
-        buildTextAttachment('att-readme', 'readme.txt')
-      ],
-      toolActivity: [
-        {
-          requestId: 'req-logscan',
-          toolUseId: 'tool-logscan',
-          toolName: 'LogScan',
-          source: 'builtin',
-          status: 'completed',
-          input: {
-            file_paths: ['vm1_access_old.log', 'vm2_catalina_new.log']
-          },
-          summary:
-            'LogScan scanned 2 file(s), 2103 line(s); found 17 error(s), 1 severe event(s), 2 HTTP 5xx, and 9 slow request(s).',
-          metadata: {
-            scanned_entire_files: true,
-            returned_examples_are_capped: true,
-            scanned_files: 2,
-            totals: {
-              lines: 2103,
-              error: 17,
-              warn: 42,
-              severe: 1,
-              http_5xx: 2,
-              slow_requests: 9
-            },
-            cross_file: {
-              shared_identifiers: [
-                {
-                  key: 'ECID',
-                  value: 'abc',
-                  count: 4,
-                  files: ['vm1_access_old.log', 'vm2_catalina_new.log']
-                }
-              ]
-            }
-          },
-          startedAt: '2026-04-24T00:00:00.000Z',
-          completedAt: '2026-04-24T00:00:01.000Z'
-        }
-      ]
-    } as WorkbenchSessionSnapshot;
-
-    renderWorkbench({
-      snapshot,
-      queuedAttachmentIds: ['att-new-access', 'att-catalina'],
-      onPromptSubmit: noop,
-      onApprove: noop,
-      onAttachFiles: noop,
-      onRemoveAttachment: noop,
-      onQueueAttachment: noop,
-      onUnqueueAttachment: noop
-    });
-
-    await user.click(screen.getByRole('tab', { name: /case/i }));
-
-    expect(screen.getByRole('heading', { name: /case evidence/i })).toBeInTheDocument();
-    expect(screen.getByText('4 uploaded')).toBeInTheDocument();
-    expect(screen.getByText('2 queued')).toBeInTheDocument();
-    expect(screen.getByText('1 report')).toBeInTheDocument();
-    expect(screen.getByText('Access logs')).toBeInTheDocument();
-    expect(screen.getByText('Catalina logs')).toBeInTheDocument();
-    expect(screen.getByText('Unclassified')).toBeInTheDocument();
-    expect(screen.getByText('vm1')).toBeInTheDocument();
-    expect(screen.getByText('vm2')).toBeInTheDocument();
-    expect(screen.getByText('Old capture')).toBeInTheDocument();
-    expect(screen.getByText('New capture')).toBeInTheDocument();
-    expect(screen.getByText('Scanned 2 logs')).toBeInTheDocument();
-    expect(screen.getByText('2,103 lines')).toBeInTheDocument();
-    expect(screen.getByText('17 errors')).toBeInTheDocument();
-    expect(screen.getByText('42 warnings')).toBeInTheDocument();
-    expect(screen.getByText('2 HTTP 5xx')).toBeInTheDocument();
-    expect(screen.getByText('9 slow requests')).toBeInTheDocument();
-    expect(screen.getByText('1 shared identifier')).toBeInTheDocument();
-    expect(screen.getByText(/examples capped/i)).toBeInTheDocument();
-    expect(screen.queryByText(/raw metadata/i)).not.toBeInTheDocument();
-  });
-
-  it('shows recoverable LogScan failures as case recovery state', async () => {
-    const user = userEvent.setup();
-    const noop = vi.fn();
-
-    renderWorkbench({
-      snapshot: {
-        ...buildInteractiveSnapshot(),
-        status: 'running',
-        messages: [
-          {
-            id: 'user-recovery',
-            role: 'user',
-            content: 'Analyze the uploaded logs'
-          }
-        ],
-        toolActivity: [
-          {
-            requestId: 'req-recovery',
-            toolUseId: 'tool-recovery',
-            toolName: 'LogScan',
-            source: 'builtin',
-            status: 'failed',
-            input: {
-              file_paths: ['vm1_access_old.log']
-            },
-            error: 'LogScan requires at least one matching file path or glob',
-            recoverable: true,
-            recoveryAttempt: 1,
-            recoveryInstruction: 'Retry with exact uploaded file paths.'
-          }
-        ]
-      },
-      queuedAttachmentIds: [],
-      onPromptSubmit: noop,
-      onApprove: noop,
-      onAttachFiles: noop,
-      onRemoveAttachment: noop,
-      onQueueAttachment: noop,
-      onUnqueueAttachment: noop
-    });
-
-    await user.click(screen.getByRole('tab', { name: /case/i }));
-
-    expect(screen.getByText(/recovery in progress/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/logscan/i).length).toBeGreaterThan(0);
-    expect(screen.getByText('Retry with exact uploaded file paths.')).toBeInTheDocument();
-    expect(screen.queryByText(/terminal failure/i)).not.toBeInTheDocument();
   });
 
   it('shows multi-file queued attachments as horizontal composer chips without losing behavior', async () => {
@@ -1025,11 +1002,11 @@ describe('App', () => {
     });
 
     expect(screen.queryByText(/files queued as one case/i)).not.toBeInTheDocument();
-    const oldAccessChip = screen.getByRole('button', { name: /remove queued attachment vm1_access_old\.log/i });
+    const oldAccessChip = screen.getByRole('button', { name: /remove vm1_access_old\.log from current message/i });
     expect(oldAccessChip.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
-    expect(screen.getByRole('button', { name: /remove queued attachment vm1_access_new\.log/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove vm1_access_new\.log from current message/i })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /remove queued attachment vm2_catalina_new\.log/i }));
+    await user.click(screen.getByRole('button', { name: /remove vm2_catalina_new\.log from current message/i }));
     expect(onUnqueueAttachment).toHaveBeenCalledWith('att-catalina');
 
     fireEvent.change(screen.getByPlaceholderText(/message support workbench/i), {
@@ -1042,6 +1019,63 @@ describe('App', () => {
       'att-new-access',
       'att-catalina'
     ]);
+  });
+
+  it('renders files attached to a submitted user prompt inside that chat turn', () => {
+    const noop = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      messages: [
+        {
+          id: 'user-with-file',
+          role: 'user',
+          content: 'what is this about ?',
+          attachmentIds: ['att-1']
+        },
+        {
+          id: 'assistant-after-file',
+          role: 'assistant',
+          content: 'I will inspect the attached file.'
+        }
+      ],
+      attachments: [
+        {
+          id: 'att-1',
+          originalName: 'oracle_forms_runtime_analysis.log',
+          storedName: 'oracle_forms_runtime_analysis.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/oracle_forms_runtime_analysis.log',
+          size: 9932,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ],
+      toolActivity: [],
+      reports: {
+        artifacts: []
+      }
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const userTurn = screen.getByText('what is this about ?').closest('.message-row');
+    expect(userTurn).not.toBeNull();
+    expect(
+      within(userTurn as HTMLElement).getByRole('group', { name: /files attached to this message/i })
+    ).toBeInTheDocument();
+    expect(within(userTurn as HTMLElement).getByText('oracle_forms_runtime_analysis.log')).toBeInTheDocument();
+    expect(within(userTurn as HTMLElement).getByText(/File - 9\.7 KB/i)).toBeInTheDocument();
   });
 
   it('shows unavailable analyzer fallback without offering /report', () => {
@@ -1105,14 +1139,14 @@ describe('App', () => {
         },
         reasonCode: 'analyzer_unavailable_direct_analysis_used',
         explanation:
-          'analyze_adf_logs unavailable: JD_MCP_ROOT is not configured. Direct analysis was used instead; no jd-mcp HTML report was generated.'
+          'analyze_adf_logs unavailable: Specialized tools root is not configured. Direct analysis was used instead; no specialized HTML report was generated.'
       }
     } as unknown as WorkbenchSessionSnapshot & Record<string, unknown>;
 
     render(
       <App
         snapshot={snapshot}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={onPromptSubmit}
         onApprove={onApprove}
@@ -1124,8 +1158,8 @@ describe('App', () => {
     );
 
     expect(screen.getByText('Analyzer unavailable, direct analysis used')).toBeInTheDocument();
-    expect(screen.getByText(/JD_MCP_ROOT is not configured/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /run jd-mcp report anyway/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Specialized tools root is not configured/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run specialized report anyway/i })).not.toBeInTheDocument();
   });
 
   it('shows shimmer thinking while a turn is running before assistant text arrives', () => {
@@ -1173,7 +1207,7 @@ describe('App', () => {
         jdMcp: {
           available: true,
           connected: true,
-          note: 'Connected to jd-mcp',
+          note: 'Connected to specialized tools',
           tools: ['analyze_adf_logs'],
           categories: ['reports'],
           toolDescriptors: []
@@ -1189,7 +1223,7 @@ describe('App', () => {
     render(
       <App
         snapshot={snapshot}
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={noop}
         onApprove={noop}
@@ -1200,12 +1234,76 @@ describe('App', () => {
       />
     );
 
-    expect(screen.getByRole('status', { name: /preparing answer/i })).toBeInTheDocument();
-    expect(screen.getByText(/^Working$/)).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: /planning the next diagnostic step/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/^Planning the next diagnostic step$/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/working for/i)).not.toBeInTheDocument();
   });
 
-  it('keeps running answer elapsed time anchored after switching sessions', () => {
+  it('renders live assistant activity with full-text shimmer instead of clipping a thinking label', () => {
+    const shimmerBlock = stylesCss.match(/\.light-sweep-text\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(shimmerBlock).toContain('background-clip: text');
+    expect(shimmerBlock).toContain('background-position: 135% 0');
+    expect(shimmerBlock).not.toMatch(/\bmask|clip-path/);
+  });
+
+  it('shows running thinking after the latest user prompt in an existing conversation', () => {
+    const noop = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      status: 'running',
+      messages: [
+        {
+          id: 'assistant-prior',
+          role: 'assistant',
+          content: 'Earlier answer from the previous turn.'
+        },
+        {
+          id: 'user-follow-up',
+          role: 'user',
+          content: 'what can you do'
+        }
+      ],
+      progressActivity: [],
+      toolActivity: [],
+      reports: {
+        artifacts: []
+      },
+      tasks: [],
+      memory: {
+        entries: []
+      },
+      history: {
+        summaries: []
+      },
+      agents: []
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const priorAnswer = screen.getByText('Earlier answer from the previous turn.').closest('.message-row');
+    const userPrompt = screen.getByText('what can you do').closest('.message-row');
+    const thinkingTrace = screen.getByRole('status', { name: /planning how to inspect trace\.log/i });
+    expect(priorAnswer).not.toBeNull();
+    expect(userPrompt).not.toBeNull();
+    expect(priorAnswer?.compareDocumentPosition(userPrompt as Element)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect(userPrompt?.compareDocumentPosition(thinkingTrace)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it('keeps running thinking anchored after switching sessions', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-24T00:02:05.000Z'));
     const noop = vi.fn();
@@ -1245,7 +1343,7 @@ describe('App', () => {
       <App
         snapshot={runningSnapshot}
         activeSessionId="session-running"
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={noop}
         onApprove={noop}
@@ -1256,13 +1354,14 @@ describe('App', () => {
       />
     );
 
-    expect(screen.getByText('Working for 2m 5s')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Planning how to inspect trace.log$/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Working for/)).toBeInTheDocument();
 
     rerender(
       <App
         snapshot={otherSnapshot}
         activeSessionId="session-other"
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={noop}
         onApprove={noop}
@@ -1272,14 +1371,14 @@ describe('App', () => {
         onUnqueueAttachment={noop}
       />
     );
-    expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Planning how to inspect trace.log$/)).not.toBeInTheDocument();
 
     vi.setSystemTime(new Date('2026-04-24T00:02:10.000Z'));
     rerender(
       <App
         snapshot={runningSnapshot}
         activeSessionId="session-running"
-        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+        health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
         queuedAttachmentIds={[]}
         onPromptSubmit={noop}
         onApprove={noop}
@@ -1290,39 +1389,58 @@ describe('App', () => {
       />
     );
 
-    expect(screen.getByText('Working for 2m 10s')).toBeInTheDocument();
-    expect(screen.queryByText('Working for 0s')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^Planning how to inspect trace.log$/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Working for/)).toBeInTheDocument();
   });
 
-  it('uses the workspace tabs and launches report viewer with Escape close', async () => {
+  it('uses the workspace tabs and jumps generated reports to the inline chat card', async () => {
     const user = userEvent.setup();
     const noop = vi.fn();
+    const onQueueAttachment = vi.fn();
+    const onUnqueueAttachment = vi.fn();
     renderWorkbench({
-      snapshot: buildInteractiveSnapshot(),
+      snapshot: {
+        ...buildInteractiveSnapshot(),
+        attachments: [
+          buildTextAttachment('att-1', 'trace.log'),
+          buildTextAttachment('att-2', 'error.png')
+        ]
+      },
       queuedAttachmentIds: ['att-1'],
       onPromptSubmit: noop,
       onApprove: noop,
       onAttachFiles: noop,
       onRemoveAttachment: noop,
-      onQueueAttachment: noop,
-      onUnqueueAttachment: noop
+      onQueueAttachment,
+      onUnqueueAttachment
     });
 
-    expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
+    const workspace = screen.getByRole('complementary', { name: /workspace/i });
+    expect(workspace).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /files/i })).toHaveAttribute('aria-selected', 'true');
+    expect(within(workspace).queryByRole('tab', { name: /case/i })).not.toBeInTheDocument();
+    expect(within(workspace).getAllByRole('tab')).toHaveLength(2);
     expect(screen.getAllByText('trace.log').length).toBeGreaterThan(0);
+    expect(within(workspace).getByLabelText(/1 of 2 workspace files added to chat/i)).toHaveTextContent('Files in chat 1/2');
+
+    await user.click(within(workspace).getByRole('button', { name: /add all/i }));
+    expect(onQueueAttachment).toHaveBeenCalledWith('att-2');
+
+    await user.click(within(workspace).getByRole('button', { name: /remove all/i }));
+    expect(onUnqueueAttachment).toHaveBeenCalledWith('att-1');
 
     await user.click(screen.getByRole('tab', { name: /reports/i }));
     expect(screen.getByRole('tab', { name: /reports/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel', { name: /reports/i })).toBeInTheDocument();
 
+    const inlineReport = screen.getByRole('article', { name: /html report adf log review/i });
     await user.click(screen.getByRole('button', { name: /open adf log review/i }));
-    expect(screen.getByRole('complementary', { name: /report viewer/i })).toBeInTheDocument();
-
-    fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() =>
-      expect(screen.queryByRole('complementary', { name: /report viewer/i })).not.toBeInTheDocument()
+    expect(inlineReport).toHaveAttribute('data-selected', 'true');
+    expect(within(inlineReport).getByTitle('ADF Log Review')).toHaveAttribute(
+      'src',
+      '/api/session/session-interactive/reports/report-interactive/content'
     );
+    expect(screen.queryByRole('complementary', { name: /report viewer/i })).not.toBeInTheDocument();
   });
 
   it('does not open a command palette and submits typed slash commands normally', async () => {
@@ -1492,7 +1610,7 @@ describe('App', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('hides completed upload confirmation while keeping queued files in the composer', () => {
+  it('shows completed uploads as temporary toasts while keeping queued files in the composer', () => {
     const noop = vi.fn();
     const uploadItems: WorkbenchUploadItem[] = [
       {
@@ -1554,12 +1672,12 @@ describe('App', () => {
       onUnqueueAttachment: noop
     });
 
-    expect(screen.queryByRole('status', { name: /ready/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/2 files ready/i)).not.toBeInTheDocument();
-    const vm1Chip = screen.getByRole('button', { name: /remove queued attachment vm1_access\.log/i });
+    expect(screen.getAllByText(/uploaded to workspace and added to this chat/i)).toHaveLength(2);
+    const vm1Chip = screen.getByRole('button', { name: /remove vm1_access\.log from current message/i });
     expect(vm1Chip.closest('.composer-box')).toBeTruthy();
     expect(vm1Chip.closest('.composer-attachment-tray')).toHaveClass('is-horizontal');
-    expect(screen.getByRole('button', { name: /remove queued attachment vm2_access\.log/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove vm2_access\.log from current message/i })).toBeInTheDocument();
   });
 
   it('supports approval keyboard shortcuts and expandable runtime details', async () => {
@@ -1659,7 +1777,7 @@ describe('App', () => {
 
     const header = screen.getByRole('banner');
     expect(within(header).getByText(/proof of concept/i)).toBeInTheDocument();
-    expect(within(header).getByText('OCA GPT-5.4')).toBeInTheDocument();
+    expect(within(header).getByText('OCA GPT-5.5')).toBeInTheDocument();
     expect(within(header).queryByText(/oracle-code-assist/i)).not.toBeInTheDocument();
     expect(within(header).queryByText(/jd-mcp/i)).not.toBeInTheDocument();
 
@@ -1693,6 +1811,119 @@ describe('App', () => {
     expect(screen.getAllByText('/report').length).toBeGreaterThan(0);
     expect(screen.queryByText('/auto-triage')).not.toBeInTheDocument();
     expect(screen.queryByText('Ctrl/Cmd+K')).not.toBeInTheDocument();
+  });
+
+  it('renders as embedded AI Diagnosis without standalone chrome and opens chats from a drawer trigger', async () => {
+    const user = userEvent.setup();
+    const noop = vi.fn();
+    window.history.pushState({}, '', '/?sessionId=session-interactive&embedded=1');
+
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      sessions: [
+        {
+          id: 'session-interactive',
+          cwd: 'C:/repo',
+          title: 'Uploaded evidence',
+          preview: 'trace.log',
+          messageCount: 3,
+          attachmentCount: 1,
+          reportCount: 1,
+          status: 'completed',
+          createdAt: '2026-04-24T00:00:00.000Z',
+          updatedAt: '2026-04-24T00:01:00.000Z'
+        }
+      ],
+      activeSessionId: 'session-interactive',
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-embedded', 'true');
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-left-rail', 'collapsed');
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+    expect(screen.queryByText(/proof of concept/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: /session history/i })).not.toBeInTheDocument();
+
+    expect(screen.getByRole('region', { name: /support workbench conversation/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/message support workbench/i)).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: /workspace/i })).toBeInTheDocument();
+    expect(screen.getByText('trace.log')).toBeInTheDocument();
+    expect(screen.getByText('ADF Log Review')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /open chat history/i }));
+
+    const rail = screen.getByRole('complementary', { name: /session history/i });
+    expect(within(rail).getByRole('navigation', { name: /chats/i })).toBeInTheDocument();
+    expect(within(rail).getByText('Uploaded evidence')).toBeInTheDocument();
+  });
+
+  it('uses the requested shell theme in embedded AI Diagnosis mode', () => {
+    const noop = vi.fn();
+    window.history.pushState({}, '', '/?sessionId=session-interactive&embedded=1&theme=dark');
+
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      activeSessionId: 'session-interactive',
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-embedded', 'true');
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  it('keeps the embedded workspace file list clipped without horizontal scrolling', () => {
+    const noop = vi.fn();
+    window.history.pushState({}, '', '/?sessionId=session-interactive&embedded=1&theme=dark');
+    const longAttachmentName =
+      'Forms/customers/oracle-forms-support-triage/extremely-long-runtime-analysis-prompt-without-breaks.md';
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      attachments: [
+        {
+          ...buildTextAttachment('att-long', longAttachmentName),
+          sourceArchive: {
+            name: 'Forms.zip',
+            relativePath:
+              'Forms/customers/oracle-forms-support-triage/prompts/extremely-long-runtime-analysis-prompt-without-breaks.md'
+          }
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      activeSessionId: 'session-interactive',
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const workspace = screen.getByRole('complementary', { name: /workspace/i });
+    const fileRow = within(workspace).getByRole('listitem');
+
+    expect(Array.from(fileRow.querySelectorAll('.workspace-row-copy small')).map((node) => node.textContent)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/extremely-long-runtime-analysis-prompt-without-breaks/i)])
+    );
+    expect(stylesCss).toMatch(/\.workspace-tab-content\s*\{[\s\S]*overflow-x:\s*hidden/);
+    expect(stylesCss).toMatch(/\.workspace-list\s*\{[\s\S]*overflow-x:\s*hidden/);
+    expect(stylesCss).toMatch(/\.workspace-file-row,\s*[\r\n]+\.workspace-report-row\s*\{[\s\S]*min-width:\s*0/);
+    expect(stylesCss).toMatch(/\.workspace-row-copy small,\s*[\r\n]+\.workspace-suggestion small\s*\{[\s\S]*overflow-wrap:\s*anywhere/);
   });
 
   it('anchors the workspace toggle to the right panel with action-specific labels', async () => {
@@ -1793,7 +2024,7 @@ describe('App', () => {
     );
   });
 
-  it('renders session history rows and upload cards', async () => {
+  it('renders session history rows without showing upload transcript cards', async () => {
     const user = userEvent.setup();
     const noop = vi.fn();
     const onNewSession = vi.fn();
@@ -1864,8 +2095,8 @@ describe('App', () => {
     await user.click(within(rail).getByRole('button', { name: /^prior adf issue 3 msg/i }));
     expect(onSelectSession).toHaveBeenCalledWith('session-interactive');
 
-    expect(screen.getByText('Uploaded 1 file from diagnostic.zip')).toBeInTheDocument();
-    expect(screen.getAllByText('logs/server.log').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Uploaded 1 file from diagnostic.zip')).not.toBeInTheDocument();
+    expect(screen.getAllByText('server.log').length).toBeGreaterThan(0);
   });
 
   it('confirms chat deletion without selecting the chat and disables active-turn deletes', async () => {
@@ -1995,7 +2226,7 @@ describe('App', () => {
     const onCancelTurn = vi.fn();
     const baseProps: ComponentProps<typeof App> = {
       snapshot: buildInteractiveSnapshot(),
-      health: { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' },
+      health: { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' },
       queuedAttachmentIds: [],
       onPromptSubmit,
       onApprove: vi.fn(),
@@ -2050,7 +2281,7 @@ function renderWorkbench(input: RenderWorkbenchInput) {
       sessions={input.sessions}
       activeSessionId={input.activeSessionId}
       uploadItems={input.uploadItems}
-      health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' }}
+      health={{ ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' }}
       queuedAttachmentIds={input.queuedAttachmentIds}
       onPromptSubmit={input.onPromptSubmit}
       onApprove={input.onApprove}
@@ -2152,7 +2383,7 @@ function buildInteractiveSnapshot(): WorkbenchSessionSnapshot {
         input: {
           log_folder: 'C:/repo/logs'
         },
-        summary: 'Generated 1 jd-mcp HTML report artifact',
+        summary: 'Generated 1 specialized HTML report artifact',
         metadata: {
           files: 4
         },
@@ -2215,13 +2446,13 @@ function buildInteractiveSnapshot(): WorkbenchSessionSnapshot {
       jdMcp: {
         available: true,
         connected: true,
-        note: 'Connected to jd-mcp',
+        note: 'Connected to specialized tools',
         tools: ['analyze_adf_logs'],
         categories: ['reports'],
         toolDescriptors: [
           {
             name: 'analyze_adf_logs',
-            description: 'Analyze ADF logs through jd-mcp.',
+            description: 'Analyze ADF logs through specialized tools.',
             source: 'jd-mcp',
             requiresApproval: true,
             category: 'reports',

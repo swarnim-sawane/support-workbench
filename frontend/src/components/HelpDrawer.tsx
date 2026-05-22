@@ -1,6 +1,7 @@
-import { Command, Keyboard, Sparkles, Upload, Wrench, X, Zap } from 'lucide-react';
+import { Command, FileText, Keyboard, Sparkles, Upload, Wrench, X } from 'lucide-react';
 import { friendlyJdMcpStatus } from '../jdMcpWorkflows';
 import type { WorkbenchCommandInfo, WorkbenchIntegrationSnapshot } from '../types';
+import { formatSpecializedToolText } from './utils';
 
 type HelpDrawerProps = {
   open: boolean;
@@ -48,7 +49,8 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
             <p className="eyebrow">Use <kbd>/</kbd> to run commands</p>
             <p>
               Slash commands guide the workflow with uploads and in-session
-              sources instead of asking for filesystem paths.
+              sources. Specialized tools are launched from the composer picker
+              when matching evidence is added to chat.
             </p>
           </section>
 
@@ -73,32 +75,35 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
               <p>
                 Upload files, drop a ZIP, or reuse something already attached in
                 this session. Runtime commands use the session context and
-                queued evidence that are visible in the workbench.
+                evidence added to chat that is visible in the workbench.
               </p>
             </div>
           </section>
 
           <section className="help-card">
-            <Zap size={18} aria-hidden="true" />
+            <FileText size={18} aria-hidden="true" />
             <div>
-              <p className="eyebrow">Fast actions</p>
-              <h3>Run app actions from / too</h3>
+              <p className="eyebrow">Report tools</p>
+              <h3>Use specialized tools on demand</h3>
               <p>
-                Inspect session state, list local skills, review configuration,
-                or compact the running conversation without leaving the keyboard.
+                Open <strong>Specialized tools</strong> in the composer to select
+                one enabled report analyzer. Disabled tools and prerequisite
+                reasons stay available in the help catalog and picker details.
               </p>
             </div>
           </section>
 
           {jdMcp ? (
-            <section className="help-section help-jd-mcp-section" aria-label="JD MCP tools">
+            <section className="help-section help-jd-mcp-section" aria-label="Specialized tools">
               <div className="help-section-title">
                 <Wrench size={17} aria-hidden="true" />
-                <h3>JD MCP tools</h3>
+                <h3>Specialized tools</h3>
               </div>
               <div className="help-jd-mcp-status">
                 <strong>{friendlyJdMcpStatus(jdMcp)}</strong>
-                <span>{jdMcp.note ?? 'No JD MCP status note is available.'}</span>
+                <span>
+                  {formatSpecializedToolText(jdMcp.note) || 'No specialized tools status note is available.'}
+                </span>
               </div>
               {jdMcpDescriptors.length ? (
                 <div className="help-tool-list">
@@ -111,8 +116,8 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
                       >
                         <div>
                           <strong>{tool.name}</strong>
-                          <p>{tool.description}</p>
-                          {tool.reason ? <small>{tool.reason}</small> : null}
+                          <p>{formatSpecializedToolText(tool.description)}</p>
+                          {tool.reason ? <small>{formatSpecializedToolText(tool.reason)}</small> : null}
                         </div>
                         <span>{unavailable ? 'Unavailable' : 'Available'}</span>
                         {tool.requiresApproval ? <em>requires approval</em> : null}
@@ -122,7 +127,7 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
                   })}
                 </div>
               ) : (
-                <p className="muted-help-copy">No JD MCP tool descriptors are loaded.</p>
+                <p className="muted-help-copy">No specialized tool descriptors are loaded.</p>
               )}
             </section>
           ) : null}

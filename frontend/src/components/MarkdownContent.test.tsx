@@ -23,4 +23,18 @@ describe('MarkdownContent', () => {
     const table = screen.getByRole('table');
     expect(table.parentElement).toHaveClass('markdown-table-scroll');
   });
+
+  it('autolinks raw localhost URLs such as the HAR viewer link', () => {
+    render(
+      <MarkdownContent
+        content="Check this local link: http://localhost:3000?fileId=file_123_xyz. Done."
+      />
+    );
+
+    const link = screen.getByRole('link', { name: 'http://localhost:3000?fileId=file_123_xyz' });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', 'http://localhost:3000?fileId=file_123_xyz');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
 });
+

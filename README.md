@@ -5,7 +5,7 @@ Local TypeScript workspace for running an Oracle Code Assist compatibility workb
 ## Workspace
 
 - `runtime/` - core workbench engine, tool catalog, session state, and OCA model provider.
-- `backend/` - Express API, SSE session streaming, file attachments, health checks, and optional JD MCP bridge.
+- `backend/` - Express API, SSE session streaming, file attachments, health checks, and optional specialized tools bridge.
 - `frontend/` - Vite + React workbench UI.
 - `src/` - reference Claude Code source tree used for compatibility work; it is not part of the npm workspace build.
 
@@ -28,7 +28,8 @@ Create a local `.env` file in the repo root:
 ```bash
 OCA_BASE_URL=https://your-oca-endpoint.example.com
 OCA_TOKEN=your-token
-OCA_MODEL=oca/gpt-5.4
+OCA_MODEL=oca/gpt-5.5
+OCA_CHAT_REQUEST_TIMEOUT_MS=600000
 ```
 
 Optional backend settings:
@@ -95,7 +96,7 @@ npm run test -w frontend
 ## Useful Endpoints
 
 - `GET /api/health/oca` - OCA provider health
-- `GET /api/health/jd-mcp` - JD MCP bridge health
+- `GET /api/health/jd-mcp` - specialized tools bridge health
 - `POST /api/session` - create or resume a workbench session
 - `GET /api/sessions` - list sessions for a workspace
 - `POST /api/session/:sessionId/prompt` - submit a prompt

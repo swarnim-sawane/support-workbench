@@ -23,7 +23,7 @@ export const COMMAND_CATALOG: EngineCommandInfo[] = [
   },
   {
     name: '/report',
-    description: 'Force the jd-mcp diagnostic report path for the current attachment set when available.',
+    description: 'Force the specialized diagnostic report path for the current attachment set when available.',
     category: 'workflow'
   },
   {

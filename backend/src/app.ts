@@ -345,7 +345,7 @@ export function createWorkbenchApp(input: {
           ok: false,
           provider: 'jd-mcp',
           status: 'unavailable',
-          error: 'jd-mcp bridge not configured'
+          error: 'Specialized tools bridge not configured'
         });
         return;
       }

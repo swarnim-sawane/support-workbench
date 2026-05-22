@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
+const devPort = Number(process.env.SUPPORT_WORKBENCH_FRONTEND_PORT ?? 4173);
+const apiProxyTarget = process.env.SUPPORT_WORKBENCH_API_PROXY_TARGET ?? 'http://localhost:4317';
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -10,9 +13,9 @@ export default defineConfig({
     }
   },
   server: {
-    port: 4173,
+    port: devPort,
     proxy: {
-      '/api': 'http://localhost:4317'
+      '/api': apiProxyTarget
     }
   },
   test: {

@@ -2,16 +2,21 @@ import {
   AlertTriangle,
   ChevronDown,
   CircleStop,
+  FileText,
   LoaderCircle,
   Paperclip,
+  Plus,
   SendHorizonal,
   UploadCloud,
   Wrench,
   X
 } from 'lucide-react';
 import {
+  useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
   type ClipboardEvent,
   type DragEvent,
   type FormEvent,
@@ -22,7 +27,8 @@ import type { WorkbenchAttachment, WorkbenchSessionSnapshot, WorkbenchUploadItem
 import {
   buildJdMcpComposerActions,
   getJdMcpToolStatus,
-  type JdMcpComposerAction
+  type JdMcpComposerAction,
+  type JdMcpWorkflowGroup
 } from '../jdMcpWorkflows';
 import { buildAttachmentStatus, formatBytes } from './utils';
 
@@ -78,6 +84,8 @@ export function Composer({
   onDropFiles
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [specializedPickerOpen, setSpecializedPickerOpen] = useState(false);
+  const [selectedSpecializedAction, setSelectedSpecializedAction] = useState<JdMcpComposerAction | null>(null);
   const activeUploadItems = uploadItems.filter(
     (item) => item.stage === 'uploading' || item.stage === 'processing'
   );
@@ -89,8 +97,19 @@ export function Composer({
         queuedAttachmentIds
       })
     : null;
-  const visiblePrimaryJdMcpActions = jdMcpActions?.primary.slice(0, 6) ?? [];
-  const enabledAdvancedJdMcpActions = jdMcpActions?.advanced.filter((action) => !action.disabled) ?? [];
+  const specializedAvailableActions = jdMcpActions?.available ?? [];
+  const specializedUnavailableActions = jdMcpActions?.unavailable ?? [];
+  const hasSpecializedToolActions = Boolean(
+    jdMcpActions && (specializedAvailableActions.length || specializedUnavailableActions.length)
+  );
+  const canSubmit = Boolean(draft.trim() || selectedSpecializedAction);
+  const specializedActionKey = specializedAvailableActions
+    .map((action) => `${action.toolName}:${action.attachmentIds.join(',')}`)
+    .join('|');
+  const groupedSpecializedActions = useMemo(
+    () => groupSpecializedActions(specializedAvailableActions),
+    [specializedActionKey]
+  );
   const eligibleAttachments = availableAttachments.filter(
     (attachment) => attachment.promptVisibility === 'available'
   );
@@ -102,7 +121,27 @@ export function Composer({
     (attachmentId) => !queuedAttachmentIds.includes(attachmentId)
   );
   const hasAttachmentSelectionControls = eligibleAttachments.length > 0;
-  const selectedAttachmentSummary = `${selectedEligibleIds.length} of ${eligibleAttachments.length} ${eligibleAttachments.length === 1 ? 'file' : 'files'} selected`;
+  const hasComposerToolbar = hasSpecializedToolActions;
+  const selectedAttachmentSummary = `Files ${selectedEligibleIds.length}/${eligibleAttachments.length}`;
+  const selectedAttachmentAriaSummary = `${selectedEligibleIds.length} of ${eligibleAttachments.length} workspace ${eligibleAttachments.length === 1 ? 'file' : 'files'} added to chat`;
+
+  useEffect(() => {
+    if (!selectedSpecializedAction) {
+      return;
+    }
+
+    const updatedAction = specializedAvailableActions.find(
+      (action) => action.toolName === selectedSpecializedAction.toolName
+    );
+    if (!updatedAction) {
+      setSelectedSpecializedAction(null);
+      return;
+    }
+
+    if (updatedAction.attachmentIds.join('|') !== selectedSpecializedAction.attachmentIds.join('|')) {
+      setSelectedSpecializedAction(updatedAction);
+    }
+  }, [specializedActionKey, selectedSpecializedAction]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -116,16 +155,39 @@ export function Composer({
 
   function submit(event?: FormEvent) {
     event?.preventDefault();
-    if (!draft.trim() || isSubmitting) {
+    if (!canSubmit || isSubmitting || status === 'running') {
+      return;
+    }
+
+    if (selectedSpecializedAction && onRunJdMcpTool) {
+      const details = draft.trim();
+      void onRunJdMcpTool({
+        toolName: selectedSpecializedAction.toolName,
+        label: details ? `${selectedSpecializedAction.label}\n\n${details}` : selectedSpecializedAction.label,
+        attachmentIds: selectedSpecializedAction.attachmentIds
+      });
+      setDraft('');
+      setSelectedSpecializedAction(null);
+      setSpecializedPickerOpen(false);
+      return;
+    }
+
+    if (!draft.trim()) {
       return;
     }
 
     void onPromptSubmit(draft, queuedAttachmentIds);
     setDraft('');
+    setSpecializedPickerOpen(false);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const composing = (event.nativeEvent as unknown as { isComposing?: boolean }).isComposing === true;
+    if (event.key === 'Escape' && specializedPickerOpen) {
+      event.preventDefault();
+      setSpecializedPickerOpen(false);
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey && !composing) {
       event.preventDefault();
       submit();
@@ -171,32 +233,40 @@ export function Composer({
 
             {hasAttachmentSelectionControls ? (
               <div className="composer-attachment-controls" aria-label="Chat file selection">
-                <span className="composer-attachment-count">{selectedAttachmentSummary}</span>
+                <span className="composer-attachment-count" aria-label={selectedAttachmentAriaSummary}>
+                  {selectedAttachmentSummary}
+                </span>
                 <div className="composer-attachment-actions">
                   <button
                     type="button"
-                    className="composer-attachment-action"
-                    aria-label="Select all eligible chat files"
+                    className="composer-attachment-action icon-only"
+                    aria-label="Add all workspace files to chat"
+                    title="Add all workspace files to chat"
                     onClick={selectAllAttachments}
                     disabled={!unselectedEligibleIds.length}
                   >
-                    Select all
+                    <Plus size={14} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
-                    className="composer-attachment-action"
-                    aria-label="Deselect all selected chat files"
+                    className="composer-attachment-action icon-only"
+                    aria-label="Remove all files from chat"
+                    title="Remove all files from chat"
                     onClick={deselectAllAttachments}
                     disabled={!selectedEligibleIds.length}
                   >
-                    Deselect all
+                    <X size={14} aria-hidden="true" />
                   </button>
                 </div>
               </div>
             ) : null}
 
+            {hasAttachmentSelectionControls && queuedAttachments.length ? (
+              <span className="composer-attachment-divider" aria-hidden="true" />
+            ) : null}
+
             {queuedAttachments.length ? (
-              <div className="queued-attachments" aria-label="Queued attachments">
+              <div className="queued-attachments" aria-label="Files added to chat">
                 {queuedAttachments.map((attachment) => (
                   <QueuedAttachmentChip
                     key={attachment.id}
@@ -207,14 +277,6 @@ export function Composer({
               </div>
             ) : null}
           </div>
-        ) : null}
-        {jdMcpActions && (visiblePrimaryJdMcpActions.length || enabledAdvancedJdMcpActions.length) ? (
-          <JdMcpActionStrip
-            primaryActions={visiblePrimaryJdMcpActions}
-            advancedActions={enabledAdvancedJdMcpActions}
-            onRunJdMcpTool={onRunJdMcpTool}
-            disabled={isSubmitting || status === 'running'}
-          />
         ) : null}
         <div className="composer-input-row">
           <button
@@ -263,91 +325,173 @@ export function Composer({
             type="submit"
             className="send-button"
             aria-label="Send prompt"
-            disabled={!draft.trim() || isSubmitting}
+            disabled={!canSubmit || isSubmitting}
           >
             <SendHorizonal size={17} />
           </button>
         )}
         </div>
+        {hasComposerToolbar ? (
+          <div className="composer-tool-row">
+            {hasSpecializedToolActions ? (
+              <SpecializedToolPicker
+                open={specializedPickerOpen}
+                selectedAction={selectedSpecializedAction}
+                groupedActions={groupedSpecializedActions}
+                unavailableActions={specializedUnavailableActions}
+                disabled={isSubmitting || status === 'running'}
+                onToggle={() => setSpecializedPickerOpen((open) => !open)}
+                onDismiss={() => setSpecializedPickerOpen(false)}
+                onSelect={(action) => {
+                  setSelectedSpecializedAction(action);
+                  setSpecializedPickerOpen(false);
+                }}
+                onRemoveSelection={() => setSelectedSpecializedAction(null)}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </form>
   );
 }
 
-function JdMcpActionStrip({
-  primaryActions,
-  advancedActions,
+function SpecializedToolPicker({
+  open,
+  selectedAction,
+  groupedActions,
+  unavailableActions,
   disabled,
-  onRunJdMcpTool
+  onToggle,
+  onDismiss,
+  onSelect,
+  onRemoveSelection
 }: {
-  primaryActions: JdMcpComposerAction[];
-  advancedActions: JdMcpComposerAction[];
+  open: boolean;
+  selectedAction: JdMcpComposerAction | null;
+  groupedActions: Array<[JdMcpWorkflowGroup, JdMcpComposerAction[]]>;
+  unavailableActions: JdMcpComposerAction[];
   disabled: boolean;
-  onRunJdMcpTool?: (input: {
-    toolName: string;
-    label: string;
-    attachmentIds: string[];
-  }) => void | Promise<void>;
+  onToggle: () => void;
+  onDismiss: () => void;
+  onSelect: (action: JdMcpComposerAction) => void;
+  onRemoveSelection: () => void;
 }) {
-  function runAction(action: JdMcpComposerAction) {
-    if (disabled || action.disabled) {
-      return;
-    }
+  const availableCount = groupedActions.reduce((count, [, actions]) => count + actions.length, 0);
 
-    void onRunJdMcpTool?.({
-      toolName: action.toolName,
-      label: action.label,
-      attachmentIds: action.attachmentIds
-    });
+  function onPickerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onDismiss();
+    }
   }
 
   return (
-    <div className="composer-jd-mcp-actions" aria-label="Analyze with JD MCP">
-      <div className="composer-jd-mcp-head">
-        <Wrench size={14} aria-hidden="true" />
-        <span>Analyze with JD MCP</span>
-      </div>
-      <div className="composer-jd-mcp-action-list">
-        {primaryActions.map((action) => (
-          <button
-            key={action.toolName}
-            type="button"
-            className="composer-jd-mcp-action"
-            title={action.disabledReason ?? action.description}
-            disabled={disabled || action.disabled}
-            aria-label={`${action.label} - ${getJdMcpToolStatus(action)}`}
-            onClick={() => runAction(action)}
-          >
-            <span>{action.label}</span>
-            <small>{getJdMcpToolStatus(action)}</small>
-          </button>
-        ))}
-        {advancedActions.length ? (
-          <details className="composer-jd-mcp-advanced">
-            <summary>
-              <ChevronDown size={14} aria-hidden="true" />
-              <span>Advanced JD MCP tools</span>
-            </summary>
-            <div className="composer-jd-mcp-advanced-list">
-              {advancedActions.map((action) => (
-                <button
-                  key={action.toolName}
-                  type="button"
-                  className="composer-jd-mcp-action compact"
-                  title={action.description}
-                  disabled={disabled}
-                  onClick={() => runAction(action)}
-                >
-                  <span>{action.label}</span>
-                  <small>{action.toolName}</small>
-                </button>
-              ))}
-            </div>
-          </details>
+    <div className="specialized-tool-control">
+      <div className="specialized-tool-toolbar">
+        <button
+          type="button"
+          className="specialized-tool-trigger"
+          aria-expanded={open}
+          aria-controls="specialized-tool-popover"
+          disabled={disabled}
+          onClick={onToggle}
+        >
+          <Wrench size={14} aria-hidden="true" />
+          <span>Specialized tools</span>
+          <ChevronDown size={13} aria-hidden="true" />
+        </button>
+        {selectedAction ? (
+          <span className="specialized-tool-tag" title={selectedAction.description}>
+            <FileText size={13} aria-hidden="true" />
+            <span>Specialized: {selectedAction.label}</span>
+            <button
+              type="button"
+              aria-label={`Remove specialized tool ${selectedAction.label}`}
+              onClick={onRemoveSelection}
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          </span>
         ) : null}
       </div>
+
+      {open ? (
+        <div
+          id="specialized-tool-popover"
+          className="specialized-tool-popover"
+          role="dialog"
+          aria-label="Specialized tools"
+          onKeyDown={onPickerKeyDown}
+        >
+          <div className="specialized-tool-popover-head">
+            <strong>Run a report tool</strong>
+            <span>{availableCount ? `${availableCount} matching` : 'No matching tools'}</span>
+          </div>
+
+          {groupedActions.length ? (
+            <div className="specialized-tool-groups">
+              {groupedActions.map(([group, actions]) => (
+                <section key={group} className="specialized-tool-group" aria-label={`${group} reports`}>
+                  <h4>{group}</h4>
+                  {actions.map((action) => (
+                    <button
+                      key={action.toolName}
+                      type="button"
+                      className="specialized-tool-row"
+                      title={action.description}
+                      onClick={() => onSelect(action)}
+                    >
+                      <span className="specialized-tool-icon" aria-hidden="true">
+                        <FileText size={15} />
+                      </span>
+                      <span className="specialized-tool-copy">
+                        <strong>{action.label}</strong>
+                        <small>{action.description}</small>
+                      </span>
+                      <span className="specialized-tool-meta">
+                        <small>{getJdMcpToolStatus(action)}</small>
+                        <em>HTML report</em>
+                      </span>
+                    </button>
+                  ))}
+                </section>
+              ))}
+            </div>
+          ) : (
+            <p className="specialized-tool-empty">
+              Add a matching log, trace, dump, workspace, or incident bundle to chat to enable report tools.
+            </p>
+          )}
+
+          {unavailableActions.length ? (
+            <details className="specialized-tool-unavailable">
+              <summary>
+                <ChevronDown size={13} aria-hidden="true" />
+                <span>Unavailable tools</span>
+                <small>{unavailableActions.length}</small>
+              </summary>
+              <div className="specialized-tool-unavailable-list">
+                {unavailableActions.map((action) => (
+                  <article key={action.toolName} className="specialized-tool-unavailable-row">
+                    <strong>{action.label}</strong>
+                    <span>{action.disabledReason ?? 'Unavailable in this session.'}</span>
+                  </article>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function groupSpecializedActions(actions: JdMcpComposerAction[]): Array<[JdMcpWorkflowGroup, JdMcpComposerAction[]]> {
+  const order: JdMcpWorkflowGroup[] = ['Logs', 'ADF', 'Forms/Reports', 'Dumps', 'Workspace/Incident'];
+  return order
+    .map((group) => [group, actions.filter((action) => action.group === group)] as [JdMcpWorkflowGroup, JdMcpComposerAction[]])
+    .filter(([, groupActions]) => groupActions.length > 0);
 }
 
 function UploadProgressPanel({ items }: { items: WorkbenchUploadItem[] }) {
@@ -441,7 +585,7 @@ function QueuedAttachmentChip({
     <button
       type="button"
       className="attachment-chip"
-      aria-label={`Remove queued attachment ${attachment.originalName}`}
+      aria-label={`Remove ${attachment.originalName} from current message`}
       onClick={() => void onUnqueueAttachment(attachment.id)}
     >
       <span>{attachment.originalName}</span>

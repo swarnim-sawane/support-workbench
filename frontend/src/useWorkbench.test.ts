@@ -33,13 +33,34 @@ describe('useWorkbench', () => {
     vi.clearAllMocks();
     resetWorkbenchBootstrapForTests();
     MockEventSource.instances = [];
+    window.history.replaceState({}, '', '/');
     vi.stubGlobal('EventSource', MockEventSource);
     vi.mocked(api.fetchHealth).mockResolvedValue({
       ok: true,
       provider: 'oracle-code-assist',
-      model: 'oca/gpt-5.4'
+      model: 'oca/gpt-5.5'
     });
     vi.mocked(api.fetchSessions).mockResolvedValue([]);
+  });
+
+  it('bootstraps directly into a session requested by the URL query', async () => {
+    window.history.replaceState({}, '', '/?sessionId=session-bridged');
+    const bridgedSnapshot = buildSnapshot('session-bridged');
+    vi.mocked(api.createSession).mockResolvedValue({
+      session: {
+        id: 'session-bridged',
+        cwd: 'C:/repo',
+        status: 'idle'
+      },
+      snapshot: bridgedSnapshot
+    });
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.activeSessionId).toBe('session-bridged'));
+
+    expect(api.createSession).toHaveBeenCalledWith({ sessionId: 'session-bridged' });
+    expect(result.current.snapshot.sessionId).toBe('session-bridged');
+    expect(MockEventSource.instances[0]?.url).toBe('/api/session/session-bridged/stream');
   });
 
   it('deletes the active chat and opens a fresh session', async () => {
@@ -84,6 +105,53 @@ describe('useWorkbench', () => {
     expect(result.current.queuedAttachmentIds).toEqual([]);
   });
 
+  it('removes a deleted inactive chat from the refreshed history', async () => {
+    const activeSnapshot = {
+      ...buildSnapshot('session-active'),
+      messages: [
+        {
+          id: 'message-active',
+          role: 'user' as const,
+          content: 'active case',
+          createdAt: '2026-04-24T10:00:00.000Z'
+        }
+      ]
+    };
+    vi.mocked(api.createSession).mockResolvedValue({
+      session: {
+        id: 'session-active',
+        cwd: 'C:/repo',
+        status: 'idle'
+      },
+      snapshot: activeSnapshot
+    });
+    vi.mocked(api.fetchSessions)
+      .mockResolvedValueOnce([
+        buildSessionSummary('session-active', '2026-04-24T10:00:00.000Z'),
+        buildSessionSummary('session-old', '2026-04-24T09:00:00.000Z')
+      ])
+      .mockResolvedValueOnce([
+        buildSessionSummary('session-active', '2026-04-24T10:00:00.000Z')
+      ]);
+    vi.mocked(api.deleteSession).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() =>
+      expect(result.current.sessions.map((session) => session.id)).toEqual([
+        'session-active',
+        'session-old'
+      ])
+    );
+
+    await act(async () => {
+      await result.current.onDeleteSession('session-old');
+    });
+
+    expect(api.deleteSession).toHaveBeenCalledWith('session-old', 'C:/repo');
+    expect(result.current.activeSessionId).toBe('session-active');
+    expect(result.current.sessions.map((session) => session.id)).toEqual(['session-active']);
+  });
+
   it('deduplicates and sorts session history snapshots by most recent activity', async () => {
     const activeSnapshot = buildSnapshot('session-active');
     vi.mocked(api.createSession).mockResolvedValue({
@@ -117,10 +185,47 @@ describe('useWorkbench', () => {
     expect(result.current.sessions[0]?.title).toBe('Latest active');
   });
 
-  it('creates only one chat when new chat is requested repeatedly before the first request settles', async () => {
+  it('does not create another chat while the active chat is still blank', async () => {
     const activeSnapshot = buildSnapshot('session-active');
+    vi.mocked(api.createSession).mockResolvedValue({
+      session: {
+        id: 'session-active',
+        cwd: 'C:/repo',
+        status: 'idle'
+      },
+      snapshot: activeSnapshot
+    });
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.activeSessionId).toBe('session-active'));
+
+    await act(async () => {
+      await result.current.onNewSession();
+      await result.current.onNewSession();
+    });
+
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    expect(result.current.activeSessionId).toBe('session-active');
+    expect(result.current.sessions).toEqual([]);
+  });
+
+  it('creates only one chat when new chat is requested repeatedly before the first request settles', async () => {
+    const activeSnapshot = {
+      ...buildSnapshot('session-active'),
+      messages: [
+        {
+          id: 'message-active',
+          role: 'user' as const,
+          content: 'existing case',
+          createdAt: '2026-04-24T09:00:00.000Z'
+        }
+      ]
+    };
     const freshSnapshot = buildSnapshot('session-fresh');
     let finishNewSession!: () => void;
+    vi.mocked(api.fetchSessions).mockResolvedValue([
+      buildSessionSummary('session-active', '2026-04-24T09:00:00.000Z')
+    ]);
     vi.mocked(api.createSession)
       .mockResolvedValueOnce({
         session: {
@@ -161,7 +266,7 @@ describe('useWorkbench', () => {
 
     expect(api.createSession).toHaveBeenCalledTimes(2);
     expect(result.current.activeSessionId).toBe('session-fresh');
-    expect(result.current.sessions.map((session) => session.id)).toEqual(['session-fresh']);
+    expect(result.current.sessions.map((session) => session.id)).toEqual(['session-active']);
   });
 
   it('switches to an existing chat only once when selection is requested repeatedly', async () => {
@@ -226,8 +331,28 @@ describe('useWorkbench', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-04-24T10:05:00.000Z'));
     try {
-      const activeSnapshot = buildSnapshot('session-active');
-      const existingSnapshot = buildSnapshot('session-existing');
+      const activeSnapshot = {
+        ...buildSnapshot('session-active'),
+        messages: [
+          {
+            id: 'message-active',
+            role: 'user' as const,
+            content: 'active case',
+            createdAt: '2026-04-24T10:00:00.000Z'
+          }
+        ]
+      };
+      const existingSnapshot = {
+        ...buildSnapshot('session-existing'),
+        messages: [
+          {
+            id: 'message-existing',
+            role: 'user' as const,
+            content: 'existing case',
+            createdAt: '2026-04-24T10:05:00.000Z'
+          }
+        ]
+      };
       vi.mocked(api.createSession)
         .mockResolvedValueOnce({
           session: {
@@ -245,10 +370,15 @@ describe('useWorkbench', () => {
           },
           snapshot: existingSnapshot
         });
-      vi.mocked(api.fetchSessions).mockResolvedValue([
-        buildSessionSummary('session-active', '2026-04-24T10:00:00.000Z'),
-        buildSessionSummary('session-existing', '2026-04-24T09:00:00.000Z')
-      ]);
+      vi.mocked(api.fetchSessions)
+        .mockResolvedValueOnce([
+          buildSessionSummary('session-active', '2026-04-24T10:00:00.000Z'),
+          buildSessionSummary('session-existing', '2026-04-24T09:00:00.000Z')
+        ])
+        .mockResolvedValueOnce([
+          buildSessionSummary('session-existing', '2026-04-24T10:05:00.000Z'),
+          buildSessionSummary('session-active', '2026-04-24T10:00:00.000Z')
+        ]);
 
       const { result } = renderHook(() => useWorkbench());
       await waitFor(() => expect(result.current.activeSessionId).toBe('session-active'));
@@ -465,7 +595,7 @@ function buildSessionSummary(
     cwd: 'C:/repo',
     createdAt: '2026-04-24T08:00:00.000Z',
     updatedAt,
-    messageCount: 0,
+    messageCount: 1,
     attachmentCount: 0,
     reportCount: 0,
     ...overrides

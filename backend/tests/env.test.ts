@@ -17,13 +17,13 @@ describe('parseDotEnv', () => {
     const parsed = parseDotEnv(`
 # comment
 OCA_BASE_URL=https://example.test
-OCA_MODEL="oca/gpt-5.4"
+OCA_MODEL="oca/gpt-5.5"
 OCA_TOKEN='secret'
 `);
 
     expect(parsed).toEqual({
       OCA_BASE_URL: 'https://example.test',
-      OCA_MODEL: 'oca/gpt-5.4',
+      OCA_MODEL: 'oca/gpt-5.5',
       OCA_TOKEN: 'secret'
     });
   });
@@ -36,7 +36,7 @@ describe('loadLocalEnv', () => {
     const envPath = join(dir, '.env');
     writeFileSync(
       envPath,
-      ['OCA_BASE_URL=https://example.test', 'OCA_MODEL=oca/gpt-5.4', 'OCA_TOKEN=from-file'].join(
+      ['OCA_BASE_URL=https://example.test', 'OCA_MODEL=oca/gpt-5.5', 'OCA_TOKEN=from-file'].join(
         '\n'
       )
     );

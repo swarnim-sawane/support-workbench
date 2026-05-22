@@ -78,7 +78,7 @@ async function main(): Promise<void> {
       JSON.stringify({
         ok: false,
         status: 'unavailable',
-        note: `jd-mcp root not found: ${root || '(missing)'}`,
+        note: `Specialized tools root not found: ${root || '(missing)'}`,
         tools: [],
         categories: []
       })
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
         JSON.stringify({
           ok: true,
           status: 'connected',
-          note: 'jd-mcp tool handlers are available.',
+          note: 'Specialized tool handlers are available.',
           ...catalog
         })
       );
@@ -120,11 +120,11 @@ async function main(): Promise<void> {
 
   const catalogServer = await registerTools(root);
   if (!catalogServer.tools.has(request.toolName)) {
-    throw new Error(`Unknown jd-mcp tool: ${request.toolName}`);
+    throw new Error(`Unknown specialized tool: ${request.toolName}`);
   }
 
   if (!JD_MCP_TOOL_META[request.toolName]) {
-    throw new Error(`Unsupported jd-mcp tool: ${request.toolName}`);
+    throw new Error(`Unsupported specialized tool: ${request.toolName}`);
   }
 
   const server = jdMcpToolRequiresJava(request.toolName)
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
     : catalogServer;
   const tool = server.tools.get(request.toolName);
   if (!tool) {
-    throw new Error(`Unknown jd-mcp tool: ${request.toolName}`);
+    throw new Error(`Unknown specialized tool: ${request.toolName}`);
   }
 
   const response = await tool.handler(request.input ?? {});

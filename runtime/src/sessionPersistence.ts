@@ -124,6 +124,9 @@ function readSessionSummary(
     if (!ownerMatches(record, ownerId)) {
       return null;
     }
+    if (!isMeaningfulSessionRecord(record)) {
+      return null;
+    }
 
     const stats = statSync(path);
     const createdAt = firstDate(
@@ -156,6 +159,25 @@ function readSessionSummary(
   } catch {
     return null;
   }
+}
+
+export function isMeaningfulSessionRecord(record: PersistedSessionRecord): boolean {
+  return (
+    record.messages.length > 0 ||
+    record.pendingApprovals.length > 0 ||
+    record.changedFiles.length > 0 ||
+    record.workspaceDiffs.length > 0 ||
+    record.tasks.length > 0 ||
+    record.memoryEntries.length > 0 ||
+    record.historySummaries.length > 0 ||
+    (record.progressActivity?.length ?? 0) > 0 ||
+    (record.toolActivity?.length ?? 0) > 0 ||
+    (record.agents?.length ?? 0) > 0 ||
+    (record.skippedTools?.length ?? 0) > 0 ||
+    record.attachments.some((attachment) => attachment.promptVisibility === 'available') ||
+    record.reports.length > 0 ||
+    Boolean(record.currentAssistantDraft.trim())
+  );
 }
 
 function firstDate(...values: Array<string | undefined>): string {

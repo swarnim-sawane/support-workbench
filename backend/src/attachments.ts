@@ -66,6 +66,18 @@ const IMAGE_MEDIA_TYPES = new Map<string, string>([
   ['.webp', 'image/webp']
 ]);
 
+const DOCUMENT_EXTENSIONS = new Map<string, string>([
+  ['.doc', 'application/msword'],
+  ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['.pdf', 'application/pdf'],
+  ['.ppt', 'application/vnd.ms-powerpoint'],
+  ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ['.xls', 'application/vnd.ms-excel'],
+  ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+]);
+
+const DOCUMENT_MEDIA_TYPES = new Set<string>(DOCUMENT_EXTENSIONS.values());
+
 const ZIP_MEDIA_TYPES = new Set(['application/zip', 'application/x-zip-compressed']);
 const MAX_ZIP_FILES = 200;
 const MAX_ZIP_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024;
@@ -117,6 +129,13 @@ function classifyByNameAndType(
     };
   }
 
+  if (DOCUMENT_MEDIA_TYPES.has(mediaType) || DOCUMENT_EXTENSIONS.has(extension)) {
+    return {
+      kind: 'text',
+      mediaType: mediaType || DOCUMENT_EXTENSIONS.get(extension) || 'application/octet-stream'
+    };
+  }
+
   return null;
 }
 
@@ -126,6 +145,17 @@ function classifyFile(file: File): { kind: EngineAttachment['kind']; mediaType: 
 
 function isZipFile(file: File): boolean {
   return extname(file.name).toLowerCase() === '.zip' || ZIP_MEDIA_TYPES.has(file.type.trim().toLowerCase());
+}
+
+function isIgnoredArchivePath(name: string): boolean {
+  const normalized = name.replace(/\\/g, '/');
+  const segments = normalized.split('/').filter(Boolean);
+  return segments.some((segment) =>
+    segment === '__MACOSX__' ||
+    segment.startsWith('__MACOSX__._') ||
+    segment === '.DS_Store' ||
+    segment.startsWith('._')
+  );
 }
 
 function toHeaders(req: Request): Headers {
@@ -173,6 +203,10 @@ export async function ingestAttachments(input: {
   const attachments: EngineAttachment[] = [];
   await mkdir(sessionUploadDir(input.cwd, input.sessionId), { recursive: true });
   for (const file of input.files) {
+    if (isIgnoredArchivePath(file.name)) {
+      continue;
+    }
+
     if (isZipFile(file)) {
       attachments.push(...await ingestZipFile(input, file));
       continue;
@@ -214,6 +248,10 @@ export async function ingestAttachments(input: {
       ...(ocrError ? { ocrError } : {}),
       uploadedAt: new Date().toISOString()
     });
+  }
+
+  if (!attachments.length) {
+    throw new Error('At least one supported attachment is required.');
   }
 
   return attachments;
@@ -318,7 +356,12 @@ function extractSupportedZipEntries(buffer: Buffer, archiveName: string): ZipEnt
     offset += 46 + fileNameLength + extraLength + commentLength;
 
     const relativePath = normalizeZipPath(rawName);
-    if (!relativePath || relativePath.endsWith('/') || classifyByNameAndType(relativePath) === null) {
+    if (
+      !relativePath ||
+      relativePath.endsWith('/') ||
+      isIgnoredArchivePath(relativePath) ||
+      classifyByNameAndType(relativePath) === null
+    ) {
       continue;
     }
     if (entries.length >= MAX_ZIP_FILES) {

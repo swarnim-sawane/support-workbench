@@ -85,6 +85,15 @@ const EMPTY_SNAPSHOT: WorkbenchSessionSnapshot = {
 
 let bootstrapPromise: Promise<BootstrapResult> | null = null;
 
+function getInitialSessionId(): string | undefined {
+  if (typeof window === 'undefined') {
+    return undefined;
+  }
+
+  const sessionId = new URLSearchParams(window.location.search).get('sessionId')?.trim();
+  return sessionId || undefined;
+}
+
 export function useWorkbench() {
   const [snapshot, setSnapshot] = useState<WorkbenchSessionSnapshot>(EMPTY_SNAPSHOT);
   const [health, setHealth] = useState<WorkbenchHealth>({
@@ -126,7 +135,7 @@ export function useWorkbench() {
   async function refreshSessions(cwd?: string) {
     try {
       const fetchedSessions = await fetchSessions(cwd);
-      setSessions((current) => mergeSessionSummaries(current, fetchedSessions));
+      setSessions(mergeSessionSummaries([], fetchedSessions));
     } catch (sessionsError) {
       setError(sessionsError instanceof Error ? sessionsError.message : String(sessionsError));
     }
@@ -144,8 +153,9 @@ export function useWorkbench() {
 
     async function bootstrap() {
       try {
+        const initialSessionId = getInitialSessionId();
         bootstrapPromise ??= Promise.all([
-          createSession(),
+          initialSessionId ? createSession({ sessionId: initialSessionId }) : createSession(),
           fetchHealth()
         ]).then(([sessionResponse, initialHealth]) => ({
           ...sessionResponse,
@@ -195,6 +205,14 @@ export function useWorkbench() {
     isBooting: isBooting || isSwitchingSession,
     error,
     async onNewSession() {
+      if (isBlankWorkbenchSession(snapshot)) {
+        setError(null);
+        setQueuedAttachmentIds([]);
+        setUploadItems([]);
+        void refreshSessions(snapshot.workspace.cwd || undefined);
+        return;
+      }
+
       const pendingAction = sessionActionRef.current;
       if (pendingAction?.kind === 'new') {
         return pendingAction.promise;
@@ -273,6 +291,7 @@ export function useWorkbench() {
       setError(null);
       try {
         await deleteSessionApi(sessionId, cwd);
+        setSessions((current) => current.filter((session) => session.id !== sessionId));
         if (isActiveDelete) {
           eventSourceRef.current?.close();
           eventSourceRef.current = null;
@@ -401,7 +420,7 @@ function mergeSessionSummaries(
   incoming: WorkbenchSessionSummary[]
 ): WorkbenchSessionSummary[] {
   const summaries = new Map<string, WorkbenchSessionSummary>();
-  for (const summary of [...current, ...incoming]) {
+  for (const summary of [...current, ...incoming].filter(isMeaningfulSessionSummary)) {
     const existing = summaries.get(summary.id);
     if (!existing || compareSessionActivity(summary, existing) <= 0) {
       summaries.set(summary.id, summary);
@@ -409,6 +428,26 @@ function mergeSessionSummaries(
   }
 
   return [...summaries.values()].sort(compareSessionActivity);
+}
+
+function isBlankWorkbenchSession(snapshot: WorkbenchSessionSnapshot): boolean {
+  return (
+    Boolean(snapshot.sessionId) &&
+    snapshot.messages.length === 0 &&
+    snapshot.pendingApprovals.length === 0 &&
+    snapshot.progressActivity.length === 0 &&
+    snapshot.toolActivity.length === 0 &&
+    snapshot.agents.length === 0 &&
+    snapshot.tasks.length === 0 &&
+    snapshot.memory.entries.length === 0 &&
+    snapshot.history.summaries.length === 0 &&
+    snapshot.attachments.every((attachment) => attachment.promptVisibility !== 'available') &&
+    snapshot.reports.artifacts.length === 0
+  );
+}
+
+function isMeaningfulSessionSummary(summary: WorkbenchSessionSummary): boolean {
+  return summary.messageCount > 0 || summary.attachmentCount > 0 || summary.reportCount > 0;
 }
 
 function compareSessionActivity(left: WorkbenchSessionSummary, right: WorkbenchSessionSummary): number {

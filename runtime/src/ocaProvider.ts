@@ -183,6 +183,7 @@ export class OcaModelProvider implements EngineModelProvider {
   private readonly token: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
+  private readonly chatRequestTimeoutMs: number;
   private readonly activeControllers = new Map<string, AbortController>();
 
   constructor(options: OcaProviderOptions = {}) {
@@ -191,6 +192,7 @@ export class OcaModelProvider implements EngineModelProvider {
     this.token = options.token ?? process.env.OCA_TOKEN;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? Number(process.env.OCA_REQUEST_TIMEOUT_MS ?? 60000);
+    this.chatRequestTimeoutMs = options.requestTimeoutMs ?? Number(process.env.OCA_CHAT_REQUEST_TIMEOUT_MS ?? process.env.OCA_REQUEST_TIMEOUT_MS ?? 60000);
   }
 
   async healthCheck(): Promise<EngineHealth> {
@@ -285,7 +287,7 @@ export class OcaModelProvider implements EngineModelProvider {
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, this.requestTimeoutMs);
+    }, this.chatRequestTimeoutMs);
     this.activeControllers.set(options.sessionId, controller);
 
     try {
@@ -312,6 +314,10 @@ export class OcaModelProvider implements EngineModelProvider {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
+
+      let yieldedIndex = 0;
+      let inToolBlock = false;
+      let toolStartIndex = -1;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -346,26 +352,105 @@ export class OcaModelProvider implements EngineModelProvider {
 
           if (text) {
             fullText += text;
+
+            // Stream state machine parsing
+            while (yieldedIndex < fullText.length) {
+              if (!inToolBlock) {
+                const matchIndex = fullText.indexOf('<claude_code_tool', yieldedIndex);
+                if (matchIndex !== -1) {
+                  // Yield any preceding assistant text delta
+                  const textBefore = fullText.slice(yieldedIndex, matchIndex);
+                  if (textBefore) {
+                    yield {
+                      type: 'assistant_delta',
+                      text: textBefore
+                    };
+                  }
+                  inToolBlock = true;
+                  toolStartIndex = matchIndex;
+                  yieldedIndex = matchIndex;
+                } else {
+                  // Avoid yielding a partial tag (e.g. "<cl") at the end of fullText
+                  const lastAngleBracket = fullText.lastIndexOf('<', fullText.length - 1);
+                  let safeEnd = fullText.length;
+                  if (lastAngleBracket >= yieldedIndex && lastAngleBracket >= fullText.length - 25) {
+                    const possibleTag = fullText.slice(lastAngleBracket);
+                    if ('<claude_code_tool'.startsWith(possibleTag)) {
+                      safeEnd = lastAngleBracket;
+                    }
+                  }
+
+                  const textToYield = fullText.slice(yieldedIndex, safeEnd);
+                  if (textToYield) {
+                    yield {
+                      type: 'assistant_delta',
+                      text: textToYield
+                    };
+                    yieldedIndex = safeEnd;
+                  }
+                  break; // Wait for more tokens
+                }
+              } else {
+                const closeIndex = fullText.indexOf('</claude_code_tool>', yieldedIndex);
+                if (closeIndex !== -1) {
+                  const blockEndIndex = closeIndex + '</claude_code_tool>'.length;
+                  const toolBlock = fullText.slice(toolStartIndex, blockEndIndex);
+                  const toolCalls = parseTaggedToolCalls(toolBlock);
+                  for (const toolCall of toolCalls) {
+                    yield {
+                      type: 'tool_call',
+                      toolUseId: toolCall.toolUseId,
+                      toolName: toolCall.toolName,
+                      input: toolCall.input,
+                      reasoning: toolCall.reasoning
+                    };
+                  }
+                  inToolBlock = false;
+                  yieldedIndex = blockEndIndex;
+                } else {
+                  break; // Wait for more tokens to close the tool block
+                }
+              }
+            }
           }
         }
       }
 
-      const parsed = parseAssistantResponse(fullText);
-      if (parsed.assistantText) {
-        yield {
-          type: 'assistant_delta',
-          text: parsed.assistantText
-        };
+      // Yield any remaining assistant text
+      if (!inToolBlock && yieldedIndex < fullText.length) {
+        const remaining = fullText.slice(yieldedIndex);
+        if (remaining) {
+          yield {
+            type: 'assistant_delta',
+            text: remaining
+          };
+        }
+      } else if (inToolBlock) {
+        const toolBlock = fullText.slice(toolStartIndex);
+        const toolCalls = parseTaggedToolCalls(toolBlock);
+        for (const toolCall of toolCalls) {
+          yield {
+            type: 'tool_call',
+            toolUseId: toolCall.toolUseId,
+            toolName: toolCall.toolName,
+            input: toolCall.input,
+            reasoning: toolCall.reasoning
+          };
+        }
       }
 
-      for (const toolCall of parsed.toolCalls) {
-        yield {
-          type: 'tool_call',
-          toolUseId: toolCall.toolUseId,
-          toolName: toolCall.toolName,
-          input: toolCall.input,
-          reasoning: toolCall.reasoning
-        };
+      // Legacy fallback (only if no XML tags were detected)
+      if (fullText && !fullText.includes('<claude_code_tool')) {
+        const legacy = parseLegacyToolCall(fullText);
+        if (legacy) {
+          yield {
+            type: 'tool_call',
+            toolUseId: legacy.toolUseId,
+            toolName: legacy.toolName,
+            input: legacy.input,
+            reasoning: legacy.reasoning
+          };
+        }
       }
 
       yield {
@@ -373,7 +458,7 @@ export class OcaModelProvider implements EngineModelProvider {
       };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError' && timedOut) {
-        throw new Error(`OCA request timed out after ${this.requestTimeoutMs} ms`);
+        throw new Error(`OCA request timed out after ${this.chatRequestTimeoutMs} ms`);
       }
       throw error;
     } finally {

@@ -270,7 +270,7 @@ describe('reduceEngineEvent', () => {
     ]);
   });
 
-  it('tracks generated jd-mcp HTML report artifacts separately from attachments', () => {
+  it('tracks generated specialized HTML report artifacts separately from attachments', () => {
     const next = reduceEngineEvent(EMPTY_SNAPSHOT as typeof EMPTY_SNAPSHOT & Record<string, unknown>, {
       type: 'report.generated',
       sessionId: 'session-1',

@@ -9,9 +9,9 @@ type MessageListProps = {
   messages: WorkbenchMessage[];
   snapshot: WorkbenchSessionSnapshot;
   reportSuggestion: WorkbenchSessionSnapshot['reportSuggestion'];
+  selectedReportId?: string | null;
   isBooting: boolean;
   showThinking: boolean;
-  onOpenReport: (reportId: string) => void;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
 };
 
@@ -19,9 +19,9 @@ export function MessageList({
   messages,
   snapshot,
   reportSuggestion,
+  selectedReportId = null,
   isBooting,
   showThinking,
-  onOpenReport,
   onPromptSubmit
 }: MessageListProps) {
   if (isBooting) {
@@ -32,6 +32,9 @@ export function MessageList({
     );
   }
 
+  const visibleMessages = messages.filter(
+    (message) => message.kind !== 'attachment' && !isRuntimeSystemMessage(message)
+  );
   const hasProgressActivity = (snapshot.progressActivity ?? []).length > 0;
   const hasRuntimeContent =
     hasProgressActivity ||
@@ -42,10 +45,10 @@ export function MessageList({
     snapshot.memory.entries.length > 0 ||
     snapshot.history.summaries.length > 0;
 
-  if (!messages.length && !showThinking && !hasRuntimeContent) {
+  if (!visibleMessages.length && !showThinking && !hasRuntimeContent) {
     return (
       <div className="empty-state">
-        <div className="empty-state-pill">OCA GPT-5.4</div>
+        <div className="empty-state-pill">OCA GPT-5.5</div>
         <h2>Drop a file, ask a question.</h2>
         <p>
           Upload ADF logs, thread dumps, HAR captures, Forms traces, JDeveloper
@@ -61,29 +64,36 @@ export function MessageList({
     );
   }
 
+  const showWorkingTrace = shouldShowWorkingTrace(snapshot, showThinking);
+  const workingTraceAnchorIndex = findWorkingTraceAnchorIndex(visibleMessages, snapshot, showWorkingTrace);
+  const runtimeAnchorIndex = findRuntimeAnchorIndex(visibleMessages, snapshot);
+
   return (
     <div className="message-list" aria-label="Conversation">
-      {messages.map((message, index) => (
-        <FragmentWithRuntime
+      {visibleMessages.map((message, index) => (
+        <FragmentWithActivity
           key={message.id}
           message={message}
-          shouldRenderRuntime={index === findRuntimeAnchorIndex(messages, snapshot)}
+          shouldRenderWorkingTrace={index === workingTraceAnchorIndex}
+          shouldRenderRuntime={index === runtimeAnchorIndex}
+          showWorkingTrace={showWorkingTrace}
+          showThinking={showThinking}
           snapshot={snapshot}
           reportSuggestion={reportSuggestion}
-          onOpenReport={onOpenReport}
+          selectedReportId={selectedReportId}
           onPromptSubmit={onPromptSubmit}
         />
       ))}
-      {findRuntimeAnchorIndex(messages, snapshot) === messages.length ? (
-        <RuntimeEventStack
+      {workingTraceAnchorIndex === visibleMessages.length ? (
+        <WorkingTrace snapshot={snapshot} showThinking={showThinking} />
+      ) : null}
+      {runtimeAnchorIndex === visibleMessages.length ? (
+        <ActivityCluster
           snapshot={snapshot}
           reportSuggestion={reportSuggestion}
-          onOpenReport={onOpenReport}
+          selectedReportId={selectedReportId}
           onPromptSubmit={onPromptSubmit}
         />
-      ) : null}
-      {shouldShowWorkingTrace(snapshot, showThinking) ? (
-        <WorkingTrace snapshot={snapshot} showThinking={showThinking} />
       ) : null}
     </div>
   );
@@ -97,42 +107,99 @@ function shouldShowWorkingTrace(
     return true;
   }
 
-  const hasObservableWork =
-    snapshot.toolActivity.length > 0 ||
-    (snapshot.progressActivity ?? []).length > 0 ||
-    snapshot.agents.length > 0;
+  const hasFailedWork =
+    snapshot.toolActivity.some((activity) => activity.status === 'failed' || activity.status === 'denied') ||
+    snapshot.pendingApprovals.length > 0;
 
-  return hasObservableWork && (snapshot.status === 'blocked' || snapshot.status === 'completed');
+  return hasFailedWork && snapshot.status === 'blocked';
 }
 
-function FragmentWithRuntime({
+function FragmentWithActivity({
   message,
+  shouldRenderWorkingTrace,
   shouldRenderRuntime,
+  showWorkingTrace,
+  showThinking,
   snapshot,
   reportSuggestion,
-  onOpenReport,
+  selectedReportId,
   onPromptSubmit
 }: {
   message: WorkbenchMessage;
+  shouldRenderWorkingTrace: boolean;
   shouldRenderRuntime: boolean;
+  showWorkingTrace: boolean;
+  showThinking: boolean;
   snapshot: WorkbenchSessionSnapshot;
   reportSuggestion: WorkbenchSessionSnapshot['reportSuggestion'];
-  onOpenReport: (reportId: string) => void;
+  selectedReportId: string | null;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
 }) {
   return (
     <>
-      <MessageBubble message={message} attachments={snapshot.attachments} />
+      {shouldRenderWorkingTrace && showWorkingTrace ? (
+        <WorkingTrace snapshot={snapshot} showThinking={showThinking} />
+      ) : null}
       {shouldRenderRuntime ? (
-        <RuntimeEventStack
+        <ActivityCluster
           snapshot={snapshot}
           reportSuggestion={reportSuggestion}
-          onOpenReport={onOpenReport}
+          selectedReportId={selectedReportId}
           onPromptSubmit={onPromptSubmit}
         />
       ) : null}
+      <MessageBubble message={message} attachments={snapshot.attachments} />
     </>
   );
+}
+
+function ActivityCluster({
+  snapshot,
+  reportSuggestion,
+  selectedReportId,
+  onPromptSubmit
+}: {
+  snapshot: WorkbenchSessionSnapshot;
+  reportSuggestion: WorkbenchSessionSnapshot['reportSuggestion'];
+  selectedReportId: string | null;
+  onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
+}) {
+  return (
+    <RuntimeEventStack
+      snapshot={snapshot}
+      reportSuggestion={reportSuggestion}
+      selectedReportId={selectedReportId}
+      onPromptSubmit={onPromptSubmit}
+    />
+  );
+}
+
+function findWorkingTraceAnchorIndex(
+  messages: WorkbenchMessage[],
+  snapshot: WorkbenchSessionSnapshot,
+  showWorkingTrace: boolean
+): number {
+  if (!showWorkingTrace) {
+    return -1;
+  }
+
+  const isLiveTurn = snapshot.status === 'running' || snapshot.status === 'awaiting_approval';
+  const lastUserIndex = isLiveTurn
+    ? findLastMessageIndex(messages, (message) => message.role === 'user')
+    : -1;
+  if (lastUserIndex >= 0) {
+    const nextAssistantIndex = messages.findIndex(
+      (message, index) => index > lastUserIndex && message.role === 'assistant'
+    );
+    return nextAssistantIndex >= 0 ? nextAssistantIndex : messages.length;
+  }
+
+  const firstAssistantIndex = messages.findIndex((message) => message.role === 'assistant');
+  if (firstAssistantIndex >= 0) {
+    return firstAssistantIndex;
+  }
+
+  return messages.length;
 }
 
 function findRuntimeAnchorIndex(
@@ -150,6 +217,17 @@ function findRuntimeAnchorIndex(
 
   if (!hasRuntimeContent) {
     return -1;
+  }
+
+  const isLiveTurn = snapshot.status === 'running' || snapshot.status === 'awaiting_approval';
+  const hasLiveToolActivity = snapshot.toolActivity.some(
+    (activity) => activity.status === 'running' || activity.status === 'pending'
+  );
+  if (isLiveTurn && hasLiveToolActivity) {
+    const liveAnchor = findWorkingTraceAnchorIndex(messages, snapshot, true);
+    if (liveAnchor >= 0) {
+      return liveAnchor;
+    }
   }
 
   const toolNames = new Set(snapshot.toolActivity.map((activity) => activity.toolName));
@@ -185,6 +263,18 @@ function findRuntimeAnchorIndex(
   return messages.length;
 }
 
+function findLastMessageIndex(
+  messages: WorkbenchMessage[],
+  predicate: (message: WorkbenchMessage) => boolean
+): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (predicate(messages[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function MessageBubble({
   message,
   attachments
@@ -193,10 +283,15 @@ function MessageBubble({
   attachments: WorkbenchAttachment[];
 }) {
   if (message.role === 'user') {
+    const attached = getMessageAttachments(message, attachments);
+
     return (
       <article className="message-row is-user">
-        <div className="message-bubble user-bubble">
-          <div className="message-copy">{message.content}</div>
+        <div className="user-message-stack">
+          {attached.length ? <UserAttachmentCards attachments={attached} /> : null}
+          <div className="message-bubble user-bubble">
+            <div className="message-copy">{message.content}</div>
+          </div>
         </div>
         <span className="avatar user-avatar" aria-hidden="true">
           <User size={15} />
@@ -230,6 +325,47 @@ function MessageBubble({
   );
 }
 
+function getMessageAttachments(
+  message: WorkbenchMessage,
+  attachments: WorkbenchAttachment[]
+): WorkbenchAttachment[] {
+  return (message.attachmentIds ?? [])
+    .map((attachmentId) => attachments.find((attachment) => attachment.id === attachmentId))
+    .filter((attachment): attachment is WorkbenchAttachment => Boolean(attachment));
+}
+
+function UserAttachmentCards({ attachments }: { attachments: WorkbenchAttachment[] }) {
+  return (
+    <div className="user-attachment-list" role="group" aria-label="Files attached to this message">
+      {attachments.map((attachment) => (
+        <article key={attachment.id} className="user-attachment-card">
+          <span className="user-attachment-icon" aria-hidden="true">
+            {attachment.kind === 'image' ? <Image size={16} /> : <FileText size={16} />}
+          </span>
+          <span className="user-attachment-copy">
+            <strong>{attachment.sourceArchive?.relativePath ?? attachment.originalName}</strong>
+            <small>
+              {attachment.kind === 'image' ? 'Image' : 'File'} - {formatBytes(attachment.size)}
+            </small>
+          </span>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function isRuntimeSystemMessage(message: WorkbenchMessage): boolean {
+  if (message.role !== 'system') {
+    return false;
+  }
+
+  if (message.kind === 'tool') {
+    return true;
+  }
+
+  return /^Running\s+\S+\s+via\s+/i.test(message.content);
+}
+
 function AttachmentMessageCard({
   message,
   attachments
@@ -237,9 +373,7 @@ function AttachmentMessageCard({
   message: WorkbenchMessage;
   attachments: WorkbenchAttachment[];
 }) {
-  const attached = (message.attachmentIds ?? [])
-    .map((attachmentId) => attachments.find((attachment) => attachment.id === attachmentId))
-    .filter((attachment): attachment is WorkbenchAttachment => Boolean(attachment));
+  const attached = getMessageAttachments(message, attachments);
   const archiveName = attached.find((attachment) => attachment.sourceArchive)?.sourceArchive?.name;
 
   return (

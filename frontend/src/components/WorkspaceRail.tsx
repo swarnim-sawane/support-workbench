@@ -1,10 +1,12 @@
 import {
   Bot,
+  Check,
   CheckSquare,
   FilePlus2,
   FolderGit2,
   History,
   MemoryStick,
+  Plus,
   PlugZap,
   TerminalSquare,
   X
@@ -16,7 +18,8 @@ import {
   buildAttachmentStatus,
   buildIntegrationStatus,
   buildToolDescriptorLabel,
-  formatBytes
+  formatBytes,
+  formatSpecializedToolText
 } from './utils';
 
 type WorkspaceRailProps = {
@@ -74,10 +77,16 @@ export function WorkspaceRail({
                   <div className="mini-actions">
                     <button
                       type="button"
+                      className={`workspace-chat-action ${queued ? 'is-active' : ''}`}
                       aria-label={
                         queued
-                          ? `Unqueue ${attachment.originalName}`
-                          : `Queue ${attachment.originalName}`
+                          ? `Remove ${attachment.originalName} from chat`
+                          : `Add ${attachment.originalName} to chat`
+                      }
+                      title={
+                        queued
+                          ? 'Remove from this chat prompt'
+                          : 'Add this uploaded file to the current chat prompt'
                       }
                       onClick={() =>
                         queued
@@ -85,7 +94,17 @@ export function WorkspaceRail({
                           : void onQueueAttachment(attachment.id)
                       }
                     >
-                      {queued ? 'Queued' : 'Queue'}
+                      {queued ? (
+                        <>
+                          <Check size={12} aria-hidden="true" />
+                          In chat
+                        </>
+                      ) : (
+                        <>
+                          <Plus size={12} aria-hidden="true" />
+                          Add to chat
+                        </>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -106,7 +125,9 @@ export function WorkspaceRail({
 
       <RailSection icon={<PlugZap size={15} />} title="Integrations">
         <p className="muted-panel">{buildIntegrationStatus(snapshot)}</p>
-        <p className="muted-panel">{snapshot.integrations.jdMcp.note ?? 'No jd-mcp note available.'}</p>
+        <p className="muted-panel">
+          {formatSpecializedToolText(snapshot.integrations.jdMcp.note) || 'No specialized tools note available.'}
+        </p>
         {snapshot.integrations.jdMcp.toolDescriptors.length ? (
           <div className="tool-cloud">
             {snapshot.integrations.jdMcp.toolDescriptors.map((tool) => (
@@ -116,7 +137,7 @@ export function WorkspaceRail({
             ))}
           </div>
         ) : (
-          <p className="muted-panel">No jd-mcp tools loaded</p>
+          <p className="muted-panel">No specialized tools loaded</p>
         )}
       </RailSection>
 

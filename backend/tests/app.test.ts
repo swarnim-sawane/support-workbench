@@ -118,7 +118,7 @@ describe('createWorkbenchApp', () => {
   it('reports OCA health from the engine provider', async () => {
     const provider: EngineModelProvider = {
       async healthCheck() {
-        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' };
+        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' };
       },
       async *sendTurn() {
         return;
@@ -137,7 +137,7 @@ describe('createWorkbenchApp', () => {
     expect(healthResponse.body).toMatchObject({
       ok: true,
       provider: 'oracle-code-assist',
-      model: 'oca/gpt-5.4'
+      model: 'oca/gpt-5.5'
     });
   });
 
@@ -193,6 +193,10 @@ describe('createWorkbenchApp', () => {
 
     const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
     const sessionId = sessionResponse.body.session.id as string;
+    const emptySessionsResponse = await client.get('/api/sessions').query({ cwd: process.cwd() });
+    expect(emptySessionsResponse.body.sessions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: sessionId })])
+    );
 
     const commandsResponse = await request(app).get('/api/commands');
     expect(commandsResponse.status).toBe(200);
@@ -381,6 +385,10 @@ describe('createWorkbenchApp', () => {
         filename: 'runtime.env',
         contentType: 'text/plain'
       })
+      .attach('files', Buffer.from('macOS sidecar'), {
+        filename: '__MACOSX__._runtime.env',
+        contentType: 'text/plain'
+      })
       .attach('files', PNG_IMAGE, {
         filename: 'error.png',
         contentType: 'image/png'
@@ -451,15 +459,7 @@ describe('createWorkbenchApp', () => {
         ocrError: 'Windows OCR engine unavailable.'
       })
     ]);
-    expect(uploadResponse.body.snapshot.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'attachment',
-          content: 'Uploaded 1 file',
-          attachmentIds: [uploadResponse.body.attachments[0].id]
-        })
-      ])
-    );
+    expect(uploadResponse.body.snapshot.messages).toEqual([]);
   });
 
   it('rejects unsupported attachment types', async () => {
@@ -491,7 +491,43 @@ describe('createWorkbenchApp', () => {
     expect(uploadResponse.body.error).toContain('Unsupported attachment type');
   });
 
-  it('extracts supported files from ZIP uploads and records an upload card', async () => {
+  it('accepts customer document attachments for AI diagnosis sessions', async () => {
+    const engine = createEngine({
+      provider: {
+        async healthCheck() {
+          return { ok: true, provider: 'fake', model: 'fake-model' };
+        },
+        async *sendTurn() {
+          return;
+        },
+        async cancelTurn() {}
+      }
+    });
+    const app = createWorkbenchApp({ engine });
+    const client = request.agent(app);
+
+    const sessionResponse = await client.post('/api/session').send({ cwd: process.cwd() });
+    const sessionId = sessionResponse.body.session.id as string;
+
+    const uploadResponse = await client
+      .post(`/api/session/${sessionId}/attachments`)
+      .attach('files', Buffer.from('%PDF-1.7\nclaim form evidence'), {
+        filename: 'ClaimForm_Maven.pdf',
+        contentType: 'application/pdf'
+      });
+
+    expect(uploadResponse.status).toBe(201);
+    expect(uploadResponse.body.attachments).toEqual([
+      expect.objectContaining({
+        originalName: 'ClaimForm_Maven.pdf',
+        mediaType: 'application/pdf',
+        kind: 'text',
+        ocrStatus: 'unavailable'
+      })
+    ]);
+  });
+
+  it('extracts supported files from ZIP uploads without adding a chat transcript card', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-zip-backend-'));
     const engine = createEngine({
       provider: {
@@ -511,6 +547,9 @@ describe('createWorkbenchApp', () => {
     const sessionId = sessionResponse.body.session.id as string;
     const zip = createStoredZip([
       { name: 'logs/server.log', data: Buffer.from('ADF_FACES-30130') },
+      { name: '__MACOSX__/._AVBCS-41519-catalina.log', data: Buffer.from('metadata') },
+      { name: 'logs/._server.log', data: Buffer.from('metadata') },
+      { name: '.DS_Store', data: Buffer.from('metadata') },
       { name: '../escape.log', data: Buffer.from('unsafe') },
       { name: 'binary/payload.bin', data: Buffer.from([0xde, 0xad]) }
     ]);
@@ -535,15 +574,7 @@ describe('createWorkbenchApp', () => {
     expect(uploadResponse.body.snapshot.attachments).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ originalName: 'diagnostic.zip' })])
     );
-    expect(uploadResponse.body.snapshot.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'attachment',
-          content: 'Uploaded 1 file from diagnostic.zip',
-          attachmentIds: [uploadResponse.body.attachments[0].id]
-        })
-      ])
-    );
+    expect(uploadResponse.body.snapshot.messages).toEqual([]);
   });
 
   it('rejects ZIP uploads with no supported files', async () => {
@@ -575,7 +606,7 @@ describe('createWorkbenchApp', () => {
     expect(uploadResponse.body.error).toContain('no supported files');
   });
 
-  it('serves jd-mcp HTML report artifacts and exposes jd-mcp health state', async () => {
+  it('serves specialized HTML report artifacts and exposes specialized tool health state', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-jdmcp-backend-'));
     const reportDir = join(cwd, 'reports');
     const reportPath = join(reportDir, 'adflr-report.html');
@@ -585,7 +616,7 @@ describe('createWorkbenchApp', () => {
     let sendTurnCount = 0;
     const provider: EngineModelProvider = {
       async healthCheck() {
-        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' };
+        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' };
       },
       async *sendTurn() {
         sendTurnCount += 1;
@@ -600,7 +631,7 @@ describe('createWorkbenchApp', () => {
 
         yield {
           type: 'assistant_delta',
-          text: 'Generated the jd-mcp report.'
+          text: 'Generated the specialized report.'
         } satisfies EngineModelEvent;
         yield {
           type: 'assistant_done'
@@ -610,7 +641,7 @@ describe('createWorkbenchApp', () => {
     };
 
     const executeTool = vi.fn(async () => ({
-      summary: 'Generated 1 jd-mcp HTML report',
+      summary: 'Generated 1 specialized HTML report',
       source: 'jd-mcp',
       artifacts: [
         {
@@ -635,7 +666,7 @@ describe('createWorkbenchApp', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true
@@ -655,13 +686,13 @@ describe('createWorkbenchApp', () => {
         jdMcp: {
           available: true,
           connected: true,
-          note: 'Connected to jd-mcp',
+          note: 'Connected to specialized tools',
           tools: ['analyze_adf_logs'],
           categories: ['reports'],
           toolDescriptors: [
             {
               name: 'analyze_adf_logs',
-              description: 'Analyze ADF logs through jd-mcp.',
+              description: 'Analyze ADF logs through specialized tools.',
               source: 'jd-mcp',
               requiresApproval: true,
               producesReports: true,
@@ -726,7 +757,7 @@ describe('createWorkbenchApp', () => {
     let sendTurnCount = 0;
     const provider: EngineModelProvider = {
       async healthCheck() {
-        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.4' };
+        return { ok: true, provider: 'oracle-code-assist', model: 'oca/gpt-5.5' };
       },
       async *sendTurn() {
         sendTurnCount += 1;

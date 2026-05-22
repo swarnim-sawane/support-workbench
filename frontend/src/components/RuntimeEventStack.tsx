@@ -17,33 +17,42 @@ import type {
   WorkbenchSessionSnapshot,
   WorkbenchToolActivity
 } from '../types';
+import { parseLogScanMetadata } from '../derivedSupportState';
 import {
   buildAgentSummary,
+  buildChatReportCardId,
   buildFriendlyToolActivityTitle,
   buildFriendlyToolGroupTitle,
+  buildReportPath,
   buildReportSuggestionTitle,
   buildToolActivitySummary,
   formatBytes,
+  formatSpecializedToolText,
+  formatToolSource,
   statusTone
 } from './utils';
 
 type RuntimeEventStackProps = {
   snapshot: WorkbenchSessionSnapshot;
   reportSuggestion: WorkbenchSessionSnapshot['reportSuggestion'];
-  onOpenReport: (reportId: string) => void;
+  selectedReportId?: string | null;
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
 };
 
 export function RuntimeEventStack({
   snapshot,
   reportSuggestion,
-  onOpenReport,
+  selectedReportId = null,
   onPromptSubmit
 }: RuntimeEventStackProps) {
   const contextCount =
     snapshot.tasks.length + snapshot.memory.entries.length + snapshot.history.summaries.length;
+  const visibleToolActivity = buildVisibleToolActivity(snapshot.toolActivity, snapshot.status);
+  const hasLiveToolActivity = visibleToolActivity.some(
+    (activity) => activity.status === 'running' || activity.status === 'pending'
+  );
   const hasRuntimeContent =
-    snapshot.toolActivity.length > 0 ||
+    visibleToolActivity.length > 0 ||
     snapshot.reports.artifacts.length > 0 ||
     Boolean(reportSuggestion) ||
     snapshot.agents.length > 0 ||
@@ -55,52 +64,52 @@ export function RuntimeEventStack({
 
   return (
     <div className="runtime-stack" aria-label="Runtime events">
-      {snapshot.toolActivity.length ? (
+      {visibleToolActivity.length ? (
+        hasLiveToolActivity ? (
+          <TranscriptEventLine
+            title={buildFriendlyToolGroupTitle(visibleToolActivity)}
+            subtitle={buildToolGroupSubtitle(visibleToolActivity)}
+            icon={buildToolGroupIcon(visibleToolActivity)}
+            tone={buildToolGroupTone(visibleToolActivity)}
+          />
+        ) : (
           <TranscriptEventGroup
-          title={buildFriendlyToolGroupTitle(snapshot.toolActivity)}
-          icon={buildToolGroupIcon(snapshot.toolActivity)}
-          tone={buildToolGroupTone(snapshot.toolActivity)}
-          open
-        >
-          <div className="runtime-list">
-            {snapshot.toolActivity.slice(0, 8).map((activity) => (
-              <ToolRuntimeRow key={activity.requestId} activity={activity} />
-            ))}
-          </div>
-        </TranscriptEventGroup>
+            title={buildFriendlyToolGroupTitle(visibleToolActivity)}
+            icon={buildToolGroupIcon(visibleToolActivity)}
+            subtitle={buildToolGroupSubtitle(visibleToolActivity)}
+            tone={buildToolGroupTone(visibleToolActivity)}
+            open={shouldOpenToolGroup(visibleToolActivity)}
+          >
+            <div className="runtime-list">
+              {visibleToolActivity.slice(0, 8).map((activity) => (
+                <ToolRuntimeRow key={activity.requestId} activity={activity} />
+              ))}
+            </div>
+          </TranscriptEventGroup>
+        )
       ) : null}
 
       {snapshot.reports.artifacts.length ? (
-        <TranscriptEventGroup
-          title={`Created ${snapshot.reports.artifacts.length} ${pluralize(
-            snapshot.reports.artifacts.length,
-            'report'
-          )}`}
-          icon={<FileText size={15} />}
-          tone="tone-ok"
-          open
-        >
-          <div className="report-chip-list">
-            {snapshot.reports.artifacts.map((artifact) => (
-              <ReportRuntimeButton
-                key={artifact.id}
-                artifact={artifact}
-                onOpenReport={onOpenReport}
-              />
-            ))}
-          </div>
-        </TranscriptEventGroup>
+        snapshot.reports.artifacts.map((artifact) => (
+          <ReportInlineCard
+            key={artifact.id}
+            sessionId={snapshot.sessionId}
+            artifact={artifact}
+            selected={artifact.id === selectedReportId}
+          />
+        ))
       ) : null}
 
       {reportSuggestion ? (
         <TranscriptEventGroup
           title={buildReportSuggestionTitle(reportSuggestion)}
+          subtitle="Specialized report handoff"
           icon={<Info size={15} />}
           tone={reportSuggestion.available ? 'tone-active' : 'tone-waiting'}
           open
         >
           <div className="runtime-list compact">
-            <p>{reportSuggestion.explanation}</p>
+            <p><LinkifiedText text={formatSpecializedToolText(reportSuggestion.explanation)} /></p>
             <small>Recommended tool: {reportSuggestion.suggestedToolName}</small>
             {reportSuggestion.canRun ? (
               <button
@@ -108,7 +117,7 @@ export function RuntimeEventStack({
                 className="secondary-action inline"
                 onClick={() => void onPromptSubmit('/report', reportSuggestion.attachmentIds)}
               >
-                Run jd-mcp report anyway
+                Run specialized report anyway
               </button>
             ) : null}
           </div>
@@ -122,6 +131,7 @@ export function RuntimeEventStack({
       {contextCount ? (
         <TranscriptEventGroup
           title={`Saved ${contextCount} ${pluralize(contextCount, 'context item')}`}
+          subtitle="Available to this case"
           icon={<History size={15} />}
           tone="tone-neutral"
           open
@@ -145,6 +155,66 @@ export function RuntimeEventStack({
   );
 }
 
+function LinkifiedText({ text }: { text: string }) {
+  const pattern = /(https?:\/\/[^\s<)"]+)/gi;
+  const parts = text.split(pattern);
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part.match(pattern)) {
+          let url = part;
+          let trailing = '';
+          const matchTrailing = url.match(/[.,;:!?]+$/);
+          if (matchTrailing) {
+            trailing = matchTrailing[0];
+            url = url.slice(0, -trailing.length);
+          }
+          return (
+            <span key={index}>
+              <a href={url} target="_blank" rel="noopener noreferrer">
+                {url}
+              </a>
+              {trailing}
+            </span>
+          );
+        }
+        return part;
+      })}
+    </>
+  );
+}
+
+function TranscriptEventLine({
+  title,
+  subtitle,
+  icon,
+  tone
+}: {
+  title: string;
+  subtitle?: string;
+  icon: ReactNode;
+  tone: string;
+}) {
+  return (
+    <div
+      className={`transcript-event-group transcript-event-line ${tone}`}
+      role="status"
+      aria-live="polite"
+      aria-label={subtitle ? `${title}. ${subtitle}` : title}
+    >
+      <span className="transcript-event-summary">
+        <span className="runtime-row-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <span className="transcript-event-copy">
+          <strong>{title}</strong>
+          {subtitle ? <small>{subtitle}</small> : null}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function AgentRuntimeGroup({
   agents
 }: {
@@ -161,7 +231,10 @@ function AgentRuntimeGroup({
         <span className="runtime-row-icon" aria-hidden="true">
           <Bot size={15} />
         </span>
-        <strong>{buildAgentGroupTitle(agents)}</strong>
+        <span className="transcript-event-copy">
+          <strong>{buildAgentGroupTitle(agents)}</strong>
+          <small>{tone === 'tone-active' ? 'Background diagnosis in progress' : 'Background findings ready'}</small>
+        </span>
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </span>
       <span className="transcript-event-body">
@@ -187,12 +260,14 @@ function AgentRuntimeGroup({
 
 function TranscriptEventGroup({
   title,
+  subtitle,
   icon,
   tone,
   open = false,
   children
 }: {
   title: string;
+  subtitle?: string;
   icon: ReactNode;
   tone: string;
   open?: boolean;
@@ -204,7 +279,10 @@ function TranscriptEventGroup({
         <span className="runtime-row-icon" aria-hidden="true">
           {icon}
         </span>
-        <strong>{title}</strong>
+        <span className="transcript-event-copy">
+          <strong>{title}</strong>
+          {subtitle ? <small>{subtitle}</small> : null}
+        </span>
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </summary>
       <div className="transcript-event-body">{children}</div>
@@ -214,9 +292,14 @@ function TranscriptEventGroup({
 
 function ToolRuntimeRow({ activity }: { activity: WorkbenchToolActivity }) {
   const title = buildToolActivityTitle(activity);
+  const isActive = activity.status === 'running' || activity.status === 'pending';
+  const shouldOpen = isActive || activity.status === 'failed' || activity.status === 'denied';
 
   return (
-    <details className={`runtime-row runtime-detail-row ${statusTone(activity.status)}`}>
+    <details
+      className={`runtime-row runtime-detail-row ${statusTone(activity.status)} ${isActive ? 'is-active' : 'is-settled'}`}
+      open={shouldOpen}
+    >
       <summary>
         <span className="runtime-row-icon" aria-hidden="true">
           <ActivityStatusIcon activity={activity} />
@@ -224,7 +307,7 @@ function ToolRuntimeRow({ activity }: { activity: WorkbenchToolActivity }) {
         <span>
           <strong>{title}</strong>
           <small>
-            {activity.source}
+            {formatToolSource(activity.source)}
             {activity.category ? ` - ${activity.category}` : ''}
             {activity.artifacts?.length ? ` - reports=${activity.artifacts.length}` : ''}
             {activity.recoverable ? ` - recovery ${activity.recoveryAttempt ?? 1}` : ''}
@@ -233,10 +316,10 @@ function ToolRuntimeRow({ activity }: { activity: WorkbenchToolActivity }) {
         <ChevronRight className="transcript-caret" size={15} aria-hidden="true" />
       </summary>
       <div className="runtime-detail-body">
-        <p>{buildToolActivitySummary(activity)}</p>
-        {activity.reasoning ? <small>Reasoning: {activity.reasoning}</small> : null}
-        {activity.error ? <small>Error: {activity.error}</small> : null}
-        {activity.recoveryInstruction ? <small>Recovery: {activity.recoveryInstruction}</small> : null}
+        <p><LinkifiedText text={buildToolActivitySummary(activity)} /></p>
+        {activity.reasoning ? <small>Reasoning: <LinkifiedText text={formatSpecializedToolText(activity.reasoning)} /></small> : null}
+        {activity.error ? <small>Error: <LinkifiedText text={formatSpecializedToolText(activity.error)} /></small> : null}
+        {activity.recoveryInstruction ? <small>Recovery: <LinkifiedText text={formatSpecializedToolText(activity.recoveryInstruction)} /></small> : null}
         <RuntimeJsonBlock label="Input" value={activity.input} />
         {activity.metadata ? <RuntimeJsonBlock label="Metadata" value={activity.metadata} /> : null}
         {activity.artifacts?.length ? (
@@ -278,23 +361,44 @@ function ActivityStatusIcon({ activity }: { activity: WorkbenchToolActivity }) {
   return <Clock3 size={14} />;
 }
 
-function ReportRuntimeButton({
+function ReportInlineCard({
+  sessionId,
   artifact,
-  onOpenReport
+  selected
 }: {
+  sessionId: string;
   artifact: WorkbenchReportArtifact;
-  onOpenReport: (reportId: string) => void;
+  selected: boolean;
 }) {
   return (
-    <button type="button" className="report-runtime-button" onClick={() => onOpenReport(artifact.id)}>
-      <FileText size={15} />
-      <span>
-        <strong>{artifact.title}</strong>
-        <small>
-          {artifact.toolName} - {artifact.source} - {formatBytes(artifact.size)}
-        </small>
-      </span>
-    </button>
+    <article
+      id={buildChatReportCardId(artifact.id)}
+      className="report-inline-card"
+      data-selected={selected ? 'true' : 'false'}
+      aria-label={`HTML report ${artifact.title}`}
+      tabIndex={-1}
+    >
+      <div className="report-inline-head">
+        <span className="runtime-row-icon" aria-hidden="true">
+          <FileText size={15} />
+        </span>
+        <span className="report-inline-copy">
+          <span className="eyebrow">HTML report</span>
+          <strong>{artifact.title}</strong>
+          <small>
+            {artifact.toolName} - {formatToolSource(artifact.source)} - {formatBytes(artifact.size)}
+          </small>
+        </span>
+      </div>
+      <div className="report-inline-frame-shell">
+        <iframe
+          title={artifact.title}
+          className="report-inline-frame"
+          src={buildReportPath(sessionId, artifact.id)}
+          loading="lazy"
+        />
+      </div>
+    </article>
   );
 }
 
@@ -316,6 +420,64 @@ function buildToolGroupTone(activities: WorkbenchToolActivity[]): string {
     return 'tone-active';
   }
   return 'tone-ok';
+}
+
+function shouldOpenToolGroup(activities: WorkbenchToolActivity[]): boolean {
+  return activities.some((activity) =>
+    activity.status === 'running' ||
+    activity.status === 'pending' ||
+    activity.status === 'failed' ||
+    activity.status === 'denied'
+  );
+}
+
+function buildVisibleToolActivity(
+  activities: WorkbenchToolActivity[],
+  sessionStatus: WorkbenchSessionSnapshot['status']
+): WorkbenchToolActivity[] {
+  const isGenerating = sessionStatus === 'running';
+  const liveActivities = activities.filter((activity) =>
+    activity.status === 'running' ||
+    activity.status === 'pending' ||
+    activity.status === 'failed' ||
+    activity.status === 'denied'
+  );
+
+  return isGenerating ? liveActivities : activities;
+}
+
+function buildToolGroupSubtitle(activities: WorkbenchToolActivity[]): string {
+  if (activities.some((activity) => activity.status === 'running')) {
+    return 'Inspecting uploaded evidence';
+  }
+  if (activities.some((activity) => activity.status === 'pending')) {
+    return 'Waiting for approval';
+  }
+  if (activities.some((activity) => activity.status === 'failed' || activity.status === 'denied')) {
+    return 'Needs attention';
+  }
+
+  const logScanActivity = activities.find(
+    (activity) => activity.toolName === 'LogScan' && activity.status === 'completed'
+  );
+  if (logScanActivity) {
+    const coverage = parseLogScanMetadata(logScanActivity.metadata);
+    if (!coverage) {
+      return 'Full-file LogScan complete';
+    }
+
+    const findings = [
+      coverage.errors ? `${coverage.errors} ${pluralize(coverage.errors, 'error')}` : null,
+      coverage.http5xx ? `${coverage.http5xx} HTTP 5xx` : null,
+      coverage.slowRequests
+        ? `${coverage.slowRequests} slow ${pluralize(coverage.slowRequests, 'request')}`
+        : null
+    ].filter(Boolean);
+
+    return findings.length ? findings.slice(0, 3).join(' - ') : 'Full-file LogScan complete';
+  }
+
+  return `Completed ${activities.length} ${pluralize(activities.length, 'tool')}`;
 }
 
 function buildToolActivityTitle(activity: WorkbenchToolActivity): string {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { buildLeakedRuntimeSystemPrompt } from './leakedRuntimePrompt.js';
 import { executeLocalTool } from './localToolExecutor.js';
@@ -12,6 +12,7 @@ import {
   loadPersistedSession,
   persistedSessionOwner,
   savePersistedSession,
+  isMeaningfulSessionRecord,
   type PersistedSessionRecord
 } from './sessionPersistence.js';
 import { discoverSkills } from './skills.js';
@@ -336,10 +337,10 @@ export function buildDefaultIntegrationSnapshot(
       available: jdMcpTools.length > 0,
       connected: enabledJdMcpTools.length > 0,
       note: enabledJdMcpTools.length
-        ? 'jd-mcp diagnostic tool definitions are loaded for this browser shell.'
+        ? 'Specialized diagnostic tool definitions are loaded for this browser shell.'
         : jdMcpTools.length
-          ? 'jd-mcp tools are recognized, but some prerequisites are still missing.'
-        : 'jd-mcp is not configured for this browser shell.',
+          ? 'Specialized tools are recognized, but some prerequisites are still missing.'
+        : 'Specialized tools are not configured for this browser shell.',
       tools: enabledJdMcpTools.map((tool) => tool.name),
       categories: [...new Set(jdMcpTools.map((tool) => tool.category).filter(Boolean))] as string[],
       toolDescriptors: [...jdMcpTools]
@@ -468,6 +469,53 @@ function resolveTurnAttachments(
   return active;
 }
 
+function availableTurnAttachments(state: SessionState): EngineAttachment[] {
+  return state.attachments.filter(
+    (attachment) =>
+      attachment.promptVisibility === 'available' &&
+      existsSync(attachment.localPath)
+  );
+}
+
+function promptRefersToWorkspaceEvidence(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (/^(diagnos[ei]s?|analy[sz]e|analyse|inspect|review|triage|summari[sz]e|compare|correlate)$/i.test(normalized)) {
+    return true;
+  }
+
+  const asksForAnalysis =
+    /\b(diagnos[ei]s?|analy[sz]e|analyse|inspect|review|triage|summari[sz]e|compare|correlate|check|find|investigate)\b/.test(
+      normalized
+    );
+  const referencesEvidence =
+    /\b(these|this|attached|uploaded|selected|files?|logs?|har|trace|dump|evidence|captures?)\b/.test(
+      normalized
+    );
+
+  return asksForAnalysis && referencesEvidence;
+}
+
+function resolvePromptAttachments(
+  state: SessionState,
+  attachmentIds: string[] | undefined,
+  prompt: string
+): EngineAttachment[] {
+  const selectedAttachments = resolveTurnAttachments(state, attachmentIds);
+  if (selectedAttachments.length) {
+    return selectedAttachments;
+  }
+
+  if (!promptRefersToWorkspaceEvidence(prompt)) {
+    return [];
+  }
+
+  return availableTurnAttachments(state);
+}
+
 function buildVisibleUserPrompt(prompt: string, attachments: EngineAttachment[]): string {
   return prompt;
 }
@@ -500,6 +548,49 @@ function isDiagnosticLikeTextAttachment(attachment: EngineAttachment): boolean {
   );
 }
 
+function attachmentLookupText(attachment: EngineAttachment): string {
+  return [
+    attachment.originalName,
+    attachment.storedName,
+    attachment.sourceArchive?.relativePath ?? ''
+  ].join(' ').toLowerCase();
+}
+
+function attachmentExtension(attachment: EngineAttachment): string {
+  return extname(attachment.originalName || attachment.storedName).toLowerCase();
+}
+
+function readAttachmentPrefix(attachment: EngineAttachment, maxBytes = 64 * 1024): string {
+  try {
+    return readFileSync(attachment.localPath, 'utf8').slice(0, maxBytes);
+  } catch {
+    return '';
+  }
+}
+
+function isAdfOdlDiagnosticAttachment(attachment: EngineAttachment): boolean {
+  if (attachment.kind !== 'text' || attachment.promptVisibility !== 'available') {
+    return false;
+  }
+
+  const text = attachmentLookupText(attachment);
+  if (!['.log', '.out', '.txt'].includes(attachmentExtension(attachment)) && !text.includes('.log')) {
+    return false;
+  }
+  if (/(^|[_\-.])(access|catalina|repojvm|jvm|gc|thread|javacore)([_\-.]|$)/i.test(text)) {
+    return false;
+  }
+  if (/(^|[_\-.])(diagnostic|odl)([_\-.]|$)|defaultserver-diagnostic|adf-diagnostic|wls-diagnostic/i.test(text)) {
+    return true;
+  }
+
+  const prefix = readAttachmentPrefix(attachment).toLowerCase();
+  return (
+    /\[[^\]]+\]\s+\[[^\]]+\]\s+\[(?:incident_error|error|warning|notice|trace|debug)\]/.test(prefix) &&
+    /\boracle\.|\bweblogic\.|\badf\b|\bjbo\b/.test(prefix)
+  );
+}
+
 function isAccessLogAttachment(attachment: EngineAttachment): boolean {
   if (attachment.kind !== 'text') {
     return false;
@@ -507,6 +598,21 @@ function isAccessLogAttachment(attachment: EngineAttachment): boolean {
 
   const normalizedName = attachment.originalName.toLowerCase();
   return normalizedName.includes('access') && /\.(log|txt|out)$/.test(normalizedName);
+}
+
+function isJvmLogAttachment(attachment: EngineAttachment): boolean {
+  if (attachment.kind !== 'text') {
+    return false;
+  }
+
+  const extension = attachmentExtension(attachment);
+  if (!['.log', '.out', '.txt'].includes(extension)) {
+    return false;
+  }
+
+  return /\b(repojvm|jvm|jvmcontroller|jvm-controller|jvm_controller)\b/i.test(
+    attachmentLookupText(attachment)
+  );
 }
 
 function findSingleDiagnosticAttachment(attachments: EngineAttachment[]): EngineAttachment | null {
@@ -518,7 +624,7 @@ function findSingleDiagnosticAttachment(attachments: EngineAttachment[]): Engine
   }
 
   const [attachment] = activeAttachments;
-  return attachment && isDiagnosticLikeTextAttachment(attachment) ? attachment : null;
+  return attachment && isAdfOdlDiagnosticAttachment(attachment) ? attachment : null;
 }
 
 function findAnalyzerFolderAttachment(
@@ -531,6 +637,14 @@ function findAnalyzerFolderAttachment(
         attachment.promptVisibility === 'available' && isAccessLogAttachment(attachment)
     );
     return accessLogAttachments[0] ?? null;
+  }
+
+  if (toolName === 'analyze_jvm_logs') {
+    const jvmLogAttachments = attachments.filter(
+      (attachment) =>
+        attachment.promptVisibility === 'available' && isJvmLogAttachment(attachment)
+    );
+    return jvmLogAttachments[0] ?? null;
   }
 
   return findSingleDiagnosticAttachment(attachments);
@@ -833,6 +947,55 @@ function normalizeReadInput(
   return next;
 }
 
+function pathTail(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  const segments = normalized.split('/').filter(Boolean);
+  return segments.at(-1) ?? normalized;
+}
+
+function attachmentPathAliases(attachment: EngineAttachment): string[] {
+  return [
+    attachment.originalName,
+    attachment.storedName,
+    attachment.sourceArchive?.relativePath ?? '',
+    pathTail(attachment.sourceArchive?.relativePath ?? ''),
+    pathTail(attachment.localPath)
+  ]
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function attachmentMatchesPathAlias(attachment: EngineAttachment, filePath: string): boolean {
+  const normalizedPath = filePath.trim();
+  if (!normalizedPath) {
+    return false;
+  }
+
+  const resolvedPath = resolve(normalizedPath);
+  if (resolvedPath === resolve(attachment.localPath)) {
+    return true;
+  }
+
+  const normalizedCandidate = normalizedPath.replace(/\\/g, '/').toLowerCase();
+  const candidateBasename = pathTail(normalizedPath).toLowerCase();
+  return attachmentPathAliases(attachment).some((alias) => {
+    const normalizedAlias = alias.replace(/\\/g, '/').toLowerCase();
+    return normalizedCandidate === normalizedAlias ||
+      candidateBasename === pathTail(normalizedAlias).toLowerCase();
+  });
+}
+
+function repairAttachmentReadPath(filePath: string, turnAttachments: EngineAttachment[]): string {
+  if (existsSync(filePath)) {
+    return filePath;
+  }
+
+  const matchedAttachment = turnAttachments.find((attachment) =>
+    attachmentMatchesPathAlias(attachment, filePath)
+  );
+  return matchedAttachment?.localPath ?? filePath;
+}
+
 function buildReadPathValidationError(
   inputValue: Record<string, unknown>,
   turnAttachments: EngineAttachment[]
@@ -859,7 +1022,11 @@ function prepareReadToolCall(
     return filePaths.map((filePath, index) => ({
       ...call,
       toolUseId: `${call.toolUseId}-${index + 1}`,
-      input: normalizeReadInput(call.input, filePath, { boundedDefaultLimit: true })
+      input: normalizeReadInput(
+        call.input,
+        repairAttachmentReadPath(filePath, turnAttachments),
+        { boundedDefaultLimit: true }
+      )
     }));
   }
 
@@ -868,7 +1035,7 @@ function prepareReadToolCall(
     return [
       {
         ...call,
-        input: normalizeReadInput(call.input, filePath)
+        input: normalizeReadInput(call.input, repairAttachmentReadPath(filePath, turnAttachments))
       }
     ];
   }
@@ -905,18 +1072,6 @@ function folderForAttachment(attachment: EngineAttachment): string {
   return existsSync(attachment.localPath) && !statSync(attachment.localPath).isDirectory()
     ? dirname(attachment.localPath)
     : attachment.localPath;
-}
-
-function attachmentLookupText(attachment: EngineAttachment): string {
-  return [
-    attachment.originalName,
-    attachment.storedName,
-    attachment.sourceArchive?.relativePath ?? ''
-  ].join(' ').toLowerCase();
-}
-
-function attachmentExtension(attachment: EngineAttachment): string {
-  return extname(attachment.originalName || attachment.storedName).toLowerCase();
 }
 
 function isNamedAttachment(attachment: EngineAttachment, pattern: RegExp): boolean {
@@ -967,6 +1122,15 @@ function firstAttachment(
   ) ?? null;
 }
 
+function matchingAttachments(
+  attachments: EngineAttachment[],
+  predicate: (attachment: EngineAttachment) => boolean
+): EngineAttachment[] {
+  return attachments.filter(
+    (attachment) => attachment.promptVisibility === 'available' && predicate(attachment)
+  );
+}
+
 function firstLogLikeAttachment(attachments: EngineAttachment[]): EngineAttachment | null {
   return firstAttachment(
     attachments,
@@ -974,13 +1138,26 @@ function firstLogLikeAttachment(attachments: EngineAttachment[]): EngineAttachme
   );
 }
 
+function folderAnalyzerInputForAttachments(attachments: EngineAttachment[]): Record<string, unknown> {
+  const [first] = attachments;
+  return {
+    log_folder: first ? folderForAttachment(first) : '',
+    file_paths: attachments.map((attachment) => attachment.localPath)
+  };
+}
+
 function buildGuidedJdMcpInput(
   toolName: string,
   attachments: EngineAttachment[]
 ): { input: Record<string, unknown>; attachmentIds: string[] } | { error: string } {
   const harAttachment = firstAttachment(attachments, isHarAttachment);
-  const accessLogAttachment = firstAttachment(attachments, isAccessLogAttachment);
+  const accessLogAttachments = matchingAttachments(attachments, isAccessLogAttachment);
+  const accessLogAttachment = accessLogAttachments[0] ?? null;
   const logAttachment = firstLogLikeAttachment(attachments);
+  const adfDiagnosticAttachments = matchingAttachments(attachments, isAdfOdlDiagnosticAttachment);
+  const adfDiagnosticAttachment = adfDiagnosticAttachments[0] ?? null;
+  const jvmLogAttachments = matchingAttachments(attachments, isJvmLogAttachment);
+  const jvmLogAttachment = jvmLogAttachments[0] ?? logAttachment;
   const threadDumpAttachment = firstAttachment(attachments, isThreadDumpAttachment);
   const formsTraceAttachment = firstAttachment(attachments, isFormsTraceAttachment);
   const formsDumpAttachment = firstAttachment(attachments, isFormsDumpAttachment);
@@ -1006,27 +1183,42 @@ function buildGuidedJdMcpInput(
     }
     case 'analyze_access_logs':
       return accessLogAttachment
-        ? { input: { log_folder: folderForAttachment(accessLogAttachment) }, attachmentIds: [accessLogAttachment.id] }
+        ? {
+            input: folderAnalyzerInputForAttachments(accessLogAttachments),
+            attachmentIds: accessLogAttachments.map((attachment) => attachment.id)
+          }
         : { error: 'Analyze access logs requires an attached access*.log file.' };
     case 'analyze_adf_logs':
-      return logAttachment
-        ? { input: { log_folder: folderForAttachment(logAttachment), mode: 'adf' }, attachmentIds: [logAttachment.id] }
-        : { error: 'Analyze ADF diagnostic logs requires an attached diagnostic log.' };
+      return adfDiagnosticAttachment
+        ? {
+            input: { ...folderAnalyzerInputForAttachments(adfDiagnosticAttachments), mode: 'adf' },
+            attachmentIds: adfDiagnosticAttachments.map((attachment) => attachment.id)
+          }
+        : { error: 'Analyze ADF diagnostic logs requires an attached ODL diagnostic log.' };
     case 'read_logs':
-      return logAttachment
-        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
-        : { error: 'Read ODL logs requires an attached log file or log folder.' };
+      return adfDiagnosticAttachment
+        ? {
+            input: folderAnalyzerInputForAttachments(adfDiagnosticAttachments),
+            attachmentIds: adfDiagnosticAttachments.map((attachment) => attachment.id)
+          }
+        : { error: 'Read ODL logs requires an attached ODL diagnostic log.' };
     case 'analyze_adf_perf':
-      return logAttachment
-        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+      return adfDiagnosticAttachment
+        ? {
+            input: folderAnalyzerInputForAttachments(adfDiagnosticAttachments),
+            attachmentIds: adfDiagnosticAttachments.map((attachment) => attachment.id)
+          }
         : { error: 'Analyze ADF performance logs requires an attached ADF diagnostic log.' };
     case 'review_jbo_activity':
-      return logAttachment
-        ? { input: { input_path: logAttachment.localPath }, attachmentIds: [logAttachment.id] }
+      return adfDiagnosticAttachment
+        ? { input: { input_path: adfDiagnosticAttachment.localPath }, attachmentIds: [adfDiagnosticAttachment.id] }
         : { error: 'Review JBO activity requires an attached JBO or ADF log.' };
     case 'analyze_view_expired':
-      return logAttachment
-        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+      return adfDiagnosticAttachment
+        ? {
+            input: folderAnalyzerInputForAttachments(adfDiagnosticAttachments),
+            attachmentIds: adfDiagnosticAttachments.map((attachment) => attachment.id)
+          }
         : { error: 'Analyze ViewExpiredException evidence requires an attached ADF diagnostic log.' };
     case 'analyze_thread_dumps':
       return threadDumpAttachment
@@ -1041,8 +1233,15 @@ function buildGuidedJdMcpInput(
         ? { input: { folder: folderForAttachment(formsDumpAttachment) }, attachmentIds: [formsDumpAttachment.id] }
         : { error: 'Review Forms trace dumps requires frmweb_dump_* files.' };
     case 'analyze_jvm_logs':
-      return logAttachment
-        ? { input: { log_folder: folderForAttachment(logAttachment) }, attachmentIds: [logAttachment.id] }
+      return jvmLogAttachment
+        ? {
+            input: folderAnalyzerInputForAttachments(
+              jvmLogAttachments.length ? jvmLogAttachments : [jvmLogAttachment]
+            ),
+            attachmentIds: (jvmLogAttachments.length ? jvmLogAttachments : [jvmLogAttachment]).map(
+              (attachment) => attachment.id
+            )
+          }
         : { error: 'Analyze JVM Controller logs requires attached JVM Controller log files.' };
     case 'analyze_workspace':
       return workspaceAttachment
@@ -1086,12 +1285,12 @@ function buildGuidedJdMcpInput(
         ? { input: { path: attachments[0].localPath, limit: DEFAULT_BULK_READ_LIMIT }, attachmentIds: [attachments[0].id] }
         : { error: 'Read text file excerpt requires at least one attachment.' };
     default:
-      return { error: `No guided JD MCP input mapping is available for ${toolName}.` };
+      return { error: `No guided specialized tool input mapping is available for ${toolName}.` };
   }
 }
 
 function createGuidedJdMcpUnavailableMessage(toolName: string, reason: string): string {
-  return `${toolName} cannot run from the guided JD MCP action: ${reason}`;
+  return `${toolName} cannot run from the guided specialized tool action: ${reason}`;
 }
 
 function repairJdMcpInputFromAttachments(
@@ -1099,7 +1298,32 @@ function repairJdMcpInputFromAttachments(
   inputValue: Record<string, unknown>,
   turnAttachments: EngineAttachment[] = []
 ): Record<string, unknown> {
-  const attachment = findAnalyzerFolderAttachment(toolName, turnAttachments);
+  const jvmFolderAnalyzerAttachments = matchingAttachments(turnAttachments, isJvmLogAttachment);
+  const folderAnalyzerAttachments =
+    toolName === 'analyze_access_logs'
+      ? matchingAttachments(turnAttachments, isAccessLogAttachment)
+      : toolName === 'analyze_jvm_logs'
+        ? (
+            jvmFolderAnalyzerAttachments.length
+              ? jvmFolderAnalyzerAttachments
+              : matchingAttachments(turnAttachments, isLogLikeTextAttachment)
+          )
+      : (
+          toolName === 'analyze_adf_logs' ||
+          toolName === 'read_logs' ||
+          toolName === 'analyze_adf_perf' ||
+          toolName === 'analyze_view_expired'
+        )
+        ? matchingAttachments(turnAttachments, isAdfOdlDiagnosticAttachment)
+        : [];
+  const attachment =
+    folderAnalyzerAttachments[0] ??
+    (
+      toolName === 'analyze_har_file' || toolName === 'correlate_har_with_logs'
+        ? firstAttachment(turnAttachments, isHarAttachment)
+        : null
+    ) ??
+    findAnalyzerFolderAttachment(toolName, turnAttachments);
   if (!attachment) {
     return inputValue;
   }
@@ -1120,11 +1344,61 @@ function repairJdMcpInputFromAttachments(
     };
   }
 
-  if (toolName === 'analyze_adf_logs' || toolName === 'read_logs' || toolName === 'analyze_access_logs') {
-    const logFolder = firstUsablePathValue(inputValue, ['log_folder', 'path', 'input_path', 'input']);
+  if (toolName === 'analyze_har_file') {
+    const harAttachment = firstAttachment(turnAttachments, isHarAttachment);
+    const harPath = firstUsablePathValue(inputValue, [
+      'har_file_path',
+      'file_path',
+      'path',
+      'input_path',
+      'input'
+    ]);
     return {
       ...inputValue,
-      log_folder: logFolder ? folderForAttachment({ ...attachment, localPath: logFolder }) : folderForAttachment(attachment)
+      har_file_path: harPath ?? harAttachment?.localPath ?? attachment.localPath
+    };
+  }
+
+  if (toolName === 'correlate_har_with_logs') {
+    const harAttachment = firstAttachment(turnAttachments, isHarAttachment);
+    const logAttachment = firstAttachment(
+      turnAttachments,
+      (candidate) => !isHarAttachment(candidate) && (isAccessLogAttachment(candidate) || isLogLikeTextAttachment(candidate))
+    );
+    const harPath = firstUsablePathValue(inputValue, [
+      'har_file_path',
+      'file_path',
+      'path',
+      'input_path',
+      'input'
+    ]);
+    const logFolderPath = firstUsablePathValue(inputValue, ['log_folder_path', 'log_folder']);
+    return {
+      ...inputValue,
+      har_file_path: harPath ?? harAttachment?.localPath ?? attachment.localPath,
+      ...(logAttachment ? { log_folder_path: logFolderPath ?? folderForAttachment(logAttachment) } : {})
+    };
+  }
+
+  if (
+    toolName === 'analyze_adf_logs' ||
+    toolName === 'read_logs' ||
+    toolName === 'analyze_access_logs' ||
+    toolName === 'analyze_jvm_logs' ||
+    toolName === 'analyze_adf_perf' ||
+    toolName === 'analyze_view_expired'
+  ) {
+    const logFolder = firstUsablePathValue(inputValue, ['log_folder', 'path', 'input_path', 'input']);
+    const compatibleAttachments = folderAnalyzerAttachments.length ? folderAnalyzerAttachments : [attachment];
+    const resolvedLogFolder = logFolder && existsSync(logFolder)
+      ? folderForAttachment({ ...attachment, localPath: logFolder })
+      : folderForAttachment(attachment);
+    return {
+      ...inputValue,
+      log_folder: resolvedLogFolder,
+      file_paths: Array.isArray(inputValue.file_paths)
+        ? inputValue.file_paths
+        : compatibleAttachments.map((item) => item.localPath)
     };
   }
 
@@ -1142,10 +1416,11 @@ function repairJdMcpInputFromAttachments(
 function isExplicitAnalyzeLogToolRequest(prompt: string): boolean {
   const normalized = prompt.toLowerCase().replace(/[_-]+/g, ' ');
   return [
-    /\b(use|using|run|invoke|call)\b.*\b(analy[sz]e\s+logs?\s+tool|analy[sz]e\s+adf\s+logs?|adf\s+analy[sz]er|jd\s*mcp)\b/,
-    /\b(analy[sz]e|analyse)\b.*\busing\b.*\b(tool|jd\s*mcp|adf\s+analy[sz]er)\b/,
-    /\b(generate|create|run)\b.*\b(report|jd\s*mcp\s+report)\b/,
+    /\b(use|using|run|invoke|call)\b.*\b(analy[sz]e\s+logs?\s+tool|analy[sz]e\s+adf\s+logs?|adf\s+analy[sz]er|specialized\s+tools?|specialized\s+analy[sz]er|jd\s*mcp)\b/,
+    /\b(analy[sz]e|analyse)\b.*\busing\b.*\b(tool|specialized\s+tools?|specialized\s+analy[sz]er|jd\s*mcp|adf\s+analy[sz]er)\b/,
+    /\b(generate|create|run)\b.*\b(report|specialized\s+report|jd\s*mcp\s+report)\b/,
     /\badf\s+analy[sz]er\b/,
+    /\bspecialized\s+tools?\b/,
     /\bjd\s*mcp\b/
   ].some((pattern) => pattern.test(normalized));
 }
@@ -1177,13 +1452,14 @@ function buildDefaultReportSuggestion(
 
   const tool = findToolDescriptor(toolCatalog, 'analyze_adf_logs');
   const folderInput = {
-    log_folder: dirname(attachment.localPath)
+    log_folder: dirname(attachment.localPath),
+    file_paths: [attachment.localPath]
   };
 
   if (!tool || !isToolVisibleToModel(tool)) {
     const explanation = tool?.reason
-      ? `No jd-mcp report was generated because analyze_adf_logs is unavailable here: ${tool.reason}`
-      : 'No jd-mcp report was generated because analyze_adf_logs is not available in this session.';
+      ? `No specialized report was generated because analyze_adf_logs is unavailable here: ${tool.reason}`
+      : 'No specialized report was generated because analyze_adf_logs is not available in this session.';
     return {
       skippedTool: {
         toolName: 'analyze_adf_logs',
@@ -1255,12 +1531,13 @@ function buildExplicitReportSuggestion(
 
   const tool = findToolDescriptor(toolCatalog, 'analyze_adf_logs');
   const folderInput = {
-    log_folder: dirname(attachment.localPath)
+    log_folder: dirname(attachment.localPath),
+    file_paths: [attachment.localPath]
   };
   const unavailableReason = tool?.reason ?? 'analyze_adf_logs is not available in this session.';
 
   if (!tool || !isToolVisibleToModel(tool)) {
-    const explanation = `analyze_adf_logs unavailable: ${unavailableReason} Direct analysis was used instead; no jd-mcp HTML report was generated.`;
+    const explanation = `analyze_adf_logs unavailable: ${unavailableReason} Direct analysis was used instead; no specialized HTML report was generated.`;
     return {
       skippedTool: {
         toolName: 'analyze_adf_logs',
@@ -1284,7 +1561,7 @@ function buildExplicitReportSuggestion(
   }
 
   const explanation =
-    'analyze_adf_logs was requested but no jd-mcp HTML report was generated. Direct analysis was used as a fallback.';
+    'analyze_adf_logs was requested but no specialized HTML report was generated. Direct analysis was used as a fallback.';
   return {
     skippedTool: {
       toolName: 'analyze_adf_logs',
@@ -1340,7 +1617,7 @@ function buildModelUserPrompt(
     lines.push(
       '',
       'Runtime instruction:',
-      'Multiple attachments are selected. Use the exact local paths listed above. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For multiple or large log files, start from the LogScan evidence when present, or call LogScan yourself before targeted Read/Grep follow-up. LogScan scans complete files and returns compact counts, examples, slow requests, status codes, timestamps, and shared identifiers. Use bounded Read calls around important LogScan lines, and use Grep only for narrowed follow-up searches. If Grep reports truncated results, use the per-file counts to narrow follow-up searches or reads before drawing conclusions. Group findings by file type or purpose, correlate timestamps and shared identifiers across files when available, state evidence coverage, wait for tool results, then produce one final answer.'
+      'Multiple attachments are selected. Use the exact local paths listed above. Display filenames are not filesystem paths, so never reconstruct paths from original filenames or cwd. Do not call Read with "undefined", "all files", "attachments", or any abstract bulk target. For multiple or large log files, start from the LogScan evidence when present, or call LogScan yourself before targeted Read/Grep follow-up. LogScan scans complete files and returns compact counts, examples, slow requests, status codes, timestamps, and shared identifiers. For HAR captures, prefer the HAR analyzer when available and use bounded Read only for targeted JSON evidence. Use Grep only for narrowed follow-up searches. If Grep reports truncated results, use the per-file counts to narrow follow-up searches or reads before drawing conclusions. Group findings by file type or purpose, correlate timestamps and shared identifiers across files when available, state evidence coverage, wait for tool results, then produce one final answer.'
     );
   }
 
@@ -1348,13 +1625,13 @@ function buildModelUserPrompt(
     lines.push(
       '',
       'Runtime instruction:',
-      `The user explicitly requested jd-mcp log analysis. Prefer calling ${explicitReportSuggestion.suggestedToolName} with exactly this input: ${JSON.stringify(explicitReportSuggestion.input)}. Do not claim a jd-mcp report exists unless the tool result provides report artifacts.`
+      `The user explicitly requested specialized log analysis. Prefer calling ${explicitReportSuggestion.suggestedToolName} with exactly this input: ${JSON.stringify(explicitReportSuggestion.input)}. Do not claim a specialized report exists unless the tool result provides report artifacts.`
     );
   } else if (explicitReportSuggestion && !explicitReportSuggestion.canRun) {
     lines.push(
       '',
       'Runtime instruction:',
-      `${explicitReportSuggestion.suggestedToolName} cannot run in this environment. Analyze the attached diagnostic log directly: use Read first to inspect the file, then use simple Grep searches for focused follow-up if needed. If a search fails, simplify the pattern or continue with Read. Clearly state that no jd-mcp HTML report was generated.`
+      `${explicitReportSuggestion.suggestedToolName} cannot run in this environment. Analyze the attached diagnostic log directly: use Read first to inspect the file, then use simple Grep searches for focused follow-up if needed. If a search fails, simplify the pattern or continue with Read. Keep the diagnosis focused on evidence; mention report unavailability only briefly after the diagnosis if the user explicitly asked about report generation.`
     );
   }
 
@@ -1490,7 +1767,7 @@ function buildRuntimeCapabilityContext(
     `- Latest report routing note: ${reportRoutingNote}`,
     `- Current tasks: ${taskSummary}`,
     `- Current remembered notes: ${memorySummary}`,
-    `- Integrations: skills=${integrations.skills.length}, mcp=${integrations.mcp.available ? 'available' : 'unavailable'}, lsp=${integrations.lsp.available ? 'available' : 'unavailable'}, jd-mcp=${integrations.jdMcp.connected ? 'connected' : integrations.jdMcp.available ? 'available' : 'unavailable'}`,
+    `- Integrations: skills=${integrations.skills.length}, mcp=${integrations.mcp.available ? 'available' : 'unavailable'}, lsp=${integrations.lsp.available ? 'available' : 'unavailable'}, specialized_tools=${integrations.jdMcp.connected ? 'connected' : integrations.jdMcp.available ? 'available' : 'unavailable'}`,
     '- If the user asks what you can do or how autonomous you are, answer specifically from this context and mention limitations plainly.'
   ].join('\n');
 }
@@ -1517,6 +1794,78 @@ function upsertProgressActivity(
 
 function progressId(phase: EngineProgressPhase, key: string): string {
   return `${phase}:${key}`;
+}
+
+function buildProgressDisclosureInstruction(): string {
+  return [
+    '# Visible progress updates',
+    '- Before you inspect evidence or call a tool, write one short plain-language sentence describing what you will check next.',
+    '- Keep that progress sentence under 14 words and make it specific to the user request or selected evidence.',
+    '- Then immediately perform the tool call or continue the analysis.',
+    '- Do not call the progress sentence "thinking", do not use generic filler, and do not repeat it in the final answer.'
+  ].join('\n');
+}
+
+function extractProgressAnnouncement(text: string): string | null {
+  const normalized = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length < 12) {
+    return null;
+  }
+
+  const sentence = normalized.match(/^(.{12,140}?[.!?])(?:\s|$)/)?.[1];
+  if (!sentence) {
+    return null;
+  }
+
+  const looksLikeProgress =
+    /\b(?:I(?:'ll| will| am going to| need to)|I'll|I will|Let me|First,? I|Next,? I|I am checking|I am inspecting|I am reviewing)\b/i
+      .test(sentence) ||
+    /\b(?:checking|inspecting|reviewing|reading|scanning|correlating|classifying|opening|validating)\b/i
+      .test(sentence);
+
+  if (!looksLikeProgress) {
+    return null;
+  }
+
+  return sentence
+    .replace(/^[-*\s]+/, '')
+    .replace(/\s+$/, '')
+    .slice(0, 120);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripProgressAnnouncementsFromContent(
+  content: string,
+  announcements: string[],
+  options: { allowEmpty?: boolean } = {}
+): string {
+  let next = content.trim();
+  for (const announcement of announcements) {
+    const trimmed = announcement.trim();
+    if (!trimmed || !next) {
+      continue;
+    }
+
+    const match = next.match(new RegExp(`^${escapeRegExp(trimmed)}(?:\\s+|$)`, 'i'));
+    if (!match) {
+      continue;
+    }
+
+    const remainder = next.slice(match[0].length).trimStart();
+    if (remainder || options.allowEmpty) {
+      next = remainder;
+    }
+  }
+  return next.trim();
 }
 
 function formatCount(count: number, singular: string, plural = `${singular}s`): string | null {
@@ -1624,6 +1973,21 @@ function isRecoverableToolFailure(
   }
 
   return !/\b(permission|approval|denied|unauthori[sz]ed|forbidden)\b/i.test(message);
+}
+
+function isContinuableJdMcpToolFailure(
+  source: EngineToolSource,
+  message: string,
+  metadata?: Record<string, unknown>
+): boolean {
+  if (source !== 'jd-mcp') {
+    return false;
+  }
+  if (metadata?.blocked === true) {
+    return false;
+  }
+
+  return !/\b(permission|approval|denied|unauthori[sz]ed|forbidden|unavailable|unsupported|not configured|required)\b/i.test(message);
 }
 
 function unavailableToolError(
@@ -1842,7 +2206,13 @@ export function createEngine(input: {
   }
 
   function persistState(state: SessionState): void {
-    savePersistedSession(state.session.cwd, toPersistedRecord(state));
+    const record = toPersistedRecord(state);
+    if (!isMeaningfulSessionRecord(record)) {
+      deletePersistedSession(state.session.cwd, state.session.id);
+      return;
+    }
+
+    savePersistedSession(state.session.cwd, record);
   }
 
   function touchSessionActivity(state: SessionState): void {
@@ -1947,6 +2317,47 @@ export function createEngine(input: {
     return activity;
   }
 
+  function updateRunningProgressLabel(
+    state: SessionState,
+    input: {
+      id: string;
+      phase: EngineProgressPhase;
+      label: string;
+      detail?: string;
+      attachmentIds?: string[];
+      toolName?: string;
+    }
+  ): EngineProgressActivity {
+    const existing = state.progressActivity.find((activity) => activity.id === input.id);
+    if (!existing || existing.status !== 'running') {
+      return startProgress(state, input);
+    }
+
+    const activity: EngineProgressActivity = {
+      ...existing,
+      phase: input.phase,
+      label: input.label,
+      detail: input.detail,
+      attachmentIds: input.attachmentIds ?? existing.attachmentIds,
+      toolName: input.toolName ?? existing.toolName,
+      status: 'running'
+    };
+    upsertProgressActivity(state, activity);
+    emit(state, {
+      type: 'progress.started',
+      sessionId: state.session.id,
+      id: activity.id,
+      phase: activity.phase,
+      label: activity.label,
+      detail: activity.detail,
+      status: 'running',
+      attachmentIds: activity.attachmentIds,
+      toolName: activity.toolName,
+      startedAt: activity.startedAt
+    });
+    return activity;
+  }
+
   function completeRunningProgress(state: SessionState, phase: EngineProgressPhase): void {
     const existing = state.progressActivity.find(
       (activity) => activity.phase === phase && activity.status === 'running'
@@ -2016,14 +2427,16 @@ export function createEngine(input: {
     }
   }
 
-  function completeCancelledTurn(state: SessionState, turnControl: TurnControl): void {
-    if (turnControl.cancelFinalized) {
-      return;
+  function completeRunningProgressActivities(state: SessionState): void {
+    const running = state.progressActivity.filter((activity) => activity.status === 'running');
+    for (const activity of running) {
+      completeProgress(state, activity);
     }
+  }
 
-    turnControl.cancelRequested = true;
-    turnControl.cancelFinalized = true;
+  function finalizeCancelledTurnState(state: SessionState): void {
     finalizeAssistantDraft(state);
+    completeRunningProgressActivities(state);
     markActiveToolActivitiesStopped(state);
     state.pendingApprovals = [];
     state.pendingToolQueue = [];
@@ -2040,8 +2453,29 @@ export function createEngine(input: {
       sessionId: state.session.id,
       status: 'completed'
     });
-    clearActiveTurn(state, turnControl);
     persistState(state);
+  }
+
+  function completeCancelledTurn(state: SessionState, turnControl: TurnControl): void {
+    if (turnControl.cancelFinalized) {
+      return;
+    }
+
+    turnControl.cancelRequested = true;
+    turnControl.cancelFinalized = true;
+    finalizeCancelledTurnState(state);
+    clearActiveTurn(state, turnControl);
+  }
+
+  function hasStaleRunningWork(state: SessionState): boolean {
+    return (
+      state.session.status === 'running' ||
+      state.session.status === 'awaiting_approval' ||
+      state.progressActivity.some((activity) => activity.status === 'running') ||
+      state.toolActivity.some((activity) => activity.status === 'running' || activity.status === 'pending') ||
+      state.pendingApprovals.length > 0 ||
+      state.pendingToolQueue.length > 0
+    );
   }
 
   function buildSnapshot(state: SessionState): EngineSessionSnapshot {
@@ -2167,19 +2601,240 @@ export function createEngine(input: {
     return `${buildLeakedRuntimeSystemPrompt(agentToolCatalog)}\n\n${addendum}`;
   }
 
-  function finalizeAssistantDraft(state: SessionState): void {
-    const content = state.currentAssistantDraft.trim();
+  function isOracleFormsSession(state: SessionState): boolean {
+    if (process.env.ORACLE_FORMS_TRIAGE === 'true') return true;
+    const cwdLower = state.session.cwd.toLowerCase();
+    if (cwdLower.includes('oracle') || cwdLower.includes('forms') || cwdLower.includes('weblogic')) return true;
+    const text = state.messages.map(m => m.content).join(' ').toLowerCase();
+    if (/\b(forms?|weblogic|oracle\s+forms|frm-\d+|rep-\d+|triage|fmb|fmx|mmx|plx|olb)\b/i.test(text)) return true;
+    for (const attachment of state.attachments) {
+      const name = (attachment.originalName || attachment.storedName).toLowerCase();
+      if (/\b(forms?|weblogic|oracle|frm-\d+|rep-\d+|fmb|fmx|mmx|plx|olb)\b/i.test(name)) return true;
+      if (['.fmb', '.fmx', '.mmx', '.plx', '.olb'].some(ext => name.endsWith(ext))) return true;
+    }
+    return false;
+  }
+
+  function findOracleFormsTriageDir(cwd: string): string | null {
+    const home = process.env.USERPROFILE || process.env.HOME || '';
+    const candidates = [
+      resolve(cwd, '.agents/skills/oracle-forms-support-triage'),
+      resolve(cwd, '../.agents/skills/oracle-forms-support-triage'),
+      resolve(process.cwd(), '.agents/skills/oracle-forms-support-triage'),
+      resolve(home, 'Documents/Work/claude-code/.agents/skills/oracle-forms-support-triage'),
+      resolve(home, '.agents/skills/oracle-forms-support-triage')
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function executeAssistantSlashCommands(state: SessionState, content: string): void {
+    const lines = content.split('\n');
+    for (let line of lines) {
+      line = line.trim();
+      if (!line.startsWith('/')) {
+        continue;
+      }
+      const commandLine = line.slice(1).trim();
+      const [command = '', ...restParts] = commandLine.split(/\s+/);
+      const rest = restParts.join(' ').trim();
+
+      if (command === 'tasks') {
+        if (rest.startsWith('add ')) {
+          const taskContent = rest.slice(4).trim();
+          if (taskContent) {
+            state.tasks = [
+              ...state.tasks,
+              {
+                id: randomUUID(),
+                content: taskContent,
+                status: 'pending'
+              }
+            ];
+            emit(state, {
+              type: 'task.updated',
+              sessionId: state.session.id,
+              tasks: [...state.tasks]
+            });
+          }
+        } else if (rest.startsWith('done ') || rest.startsWith('complete ')) {
+          const target = rest.replace(/^(done|complete)\s+/, '').trim();
+          if (target) {
+            state.tasks = state.tasks.map((task) =>
+              task.id === target || task.content.toLowerCase() === target.toLowerCase()
+                ? { ...task, status: 'completed' }
+                : task
+            );
+            emit(state, {
+              type: 'task.updated',
+              sessionId: state.session.id,
+              tasks: [...state.tasks]
+            });
+          }
+        } else if (rest === 'clear') {
+          state.tasks = [];
+          emit(state, {
+            type: 'task.updated',
+            sessionId: state.session.id,
+            tasks: [...state.tasks]
+          });
+        }
+      } else if (command === 'memory') {
+        if (rest.startsWith('remember ')) {
+          const memoryContent = rest.slice('remember '.length).trim();
+          if (memoryContent) {
+            state.memoryEntries = [
+              ...state.memoryEntries,
+              {
+                id: randomUUID(),
+                content: memoryContent,
+                createdAt: new Date().toISOString()
+              }
+            ];
+            emit(state, {
+              type: 'memory.updated',
+              sessionId: state.session.id,
+              entries: [...state.memoryEntries]
+            });
+          }
+        }
+      }
+    }
+  }
+
+  function copyDirRecursive(src: string, dest: string) {
+    mkdirSync(dest, { recursive: true });
+    const entries = readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = resolve(src, entry.name);
+      const destPath = resolve(dest, entry.name);
+      if (entry.isDirectory()) {
+        copyDirRecursive(srcPath, destPath);
+      } else {
+        copyFileSync(srcPath, destPath);
+      }
+    }
+  }
+
+  async function handleOracleFormsAutoInit(
+    state: SessionState,
+    prompt: string,
+    turnAttachments: EngineAttachment[]
+  ): Promise<void> {
+    // Determine case folder details
+    let customerName = 'unknown_customer';
+    let caseNumber = `SR_unknown`;
+
+    const srMatch = prompt.match(/\b(3-\d{8,11})\b/) || prompt.match(/\bSR[_-]?(\d+)\b/i) || prompt.match(/\bCase[_-]?#?\s*(\d+)\b/i) || prompt.match(/\bSR_([0-9]-[0-9]+)\b/i);
+    if (srMatch) {
+      caseNumber = srMatch[1];
+    } else {
+      caseNumber = `SR_${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
+    }
+
+    const customerMatch = prompt.match(/\bcustomer\s+["']?([A-Za-z0-9_\-]+)["']?/i) || prompt.match(/\bfor\s+["']?([A-Za-z0-9_\-]+)["']?/i) || prompt.match(/\btriage\s+["']?([A-Za-z0-9_\-]+)["']?\b/i);
+    if (customerMatch) {
+      customerName = customerMatch[1];
+    }
+
+    const triageDir = findOracleFormsTriageDir(state.session.cwd);
+    if (!triageDir) {
+      return;
+    }
+
+    const customersRoot = resolve(state.session.cwd, 'customers');
+    const safeCustomer = customerName.replace(/[ /:]/g, '_');
+    const safeCase = caseNumber.replace(/[ /:]/g, '_');
+    const caseDir = resolve(customersRoot, safeCustomer, safeCase);
+
+    if (!existsSync(caseDir)) {
+      const templateDir = resolve(triageDir, 'assets/case_template');
+      if (existsSync(templateDir)) {
+        copyDirRecursive(templateDir, caseDir);
+      } else {
+        mkdirSync(caseDir, { recursive: true });
+      }
+
+      // Pre-create standard subdirs as listed in SKILL.md
+      const subDirs = [
+        '00_intake',
+        '01_install_logs',
+        '02_runtime_logs',
+        '03_config',
+        '04_jars',
+        '05_env',
+        '06_screenshots',
+        '07_analysis'
+      ];
+      for (const subDir of subDirs) {
+        const subPath = resolve(caseDir, subDir);
+        if (!existsSync(subPath)) {
+          mkdirSync(subPath, { recursive: true });
+        }
+      }
+    }
+
+    // Copy attachments to 00_intake and update their local paths
+    for (const attachment of turnAttachments) {
+      const destName = attachment.originalName || attachment.storedName;
+      const destPath = resolve(caseDir, '00_intake', destName);
+      try {
+        if (existsSync(attachment.localPath)) {
+          copyFileSync(attachment.localPath, destPath);
+          attachment.localPath = destPath;
+        }
+      } catch (err) {
+        console.error(`Failed to copy attachment ${attachment.id} to ${destPath}:`, err);
+      }
+    }
+
+    // Initialize triage tasks
+    state.tasks = [
+      { id: randomUUID(), content: `Initialize customer workspace folder and copy intake attachments for ${customerName} / ${caseNumber}`, status: 'completed' },
+      { id: randomUUID(), content: 'Analyze intake documents, logs, and environments', status: 'pending' },
+      { id: randomUUID(), content: 'Check patch levels, JVM versions, and classpath config', status: 'pending' },
+      { id: randomUUID(), content: 'Identify the failure timestamp and error codes', status: 'pending' },
+      { id: randomUUID(), content: 'Draft root cause analysis, confidence level, and evidence-based fix plan', status: 'pending' }
+    ];
+
+    emit(state, {
+      type: 'task.updated',
+      sessionId: state.session.id,
+      tasks: [...state.tasks]
+    });
+  }
+
+  function finalizeAssistantDraft(state: SessionState, progressAnnouncements: string[] = []): void {
+    const content = stripProgressAnnouncementsFromContent(
+      state.currentAssistantDraft,
+      progressAnnouncements
+    );
     if (!content) {
       state.currentAssistantDraft = '';
       return;
     }
 
-    const assistantMessage = createMessage('assistant', content);
+    // Parse and run slash commands generated by the assistant
+    executeAssistantSlashCommands(state, content);
+
+    // Strip tool call XML blocks for the user-visible message
+    const cleanContent = content
+      .replace(/<claude_code_tool\b[^>]*>[\s\S]*?<\/claude_code_tool>/gi, '')
+      .trim();
+
+    const assistantMessage = createMessage('assistant', cleanContent);
     state.messages.push(assistantMessage);
+
+    // Keep XML blocks in modelHistory so the model retains full context
     state.modelHistory.push({
       role: 'assistant',
       content
     });
+
     emit(state, {
       type: 'message.assistant.done',
       sessionId: state.session.id,
@@ -2188,8 +2843,11 @@ export function createEngine(input: {
     state.currentAssistantDraft = '';
   }
 
-  function emitAssistantDraftDelta(state: SessionState): void {
-    const content = state.currentAssistantDraft.trim();
+  function emitAssistantDraftDelta(state: SessionState, progressAnnouncements: string[] = []): void {
+    const content = stripProgressAnnouncementsFromContent(
+      state.currentAssistantDraft,
+      progressAnnouncements
+    );
     if (!content) {
       return;
     }
@@ -2636,13 +3294,15 @@ export function createEngine(input: {
           label: `Running ${toolName}`,
           toolName
         });
-        pushSystemMessageAndEmit(
-          state,
-          recoverable
-            ? `${toolName} failed (recoverable attempt ${recoveryAttempt}/${MAX_RECOVERABLE_TOOL_FAILURES}): ${message}`
-            : `${toolName} failed: ${message}`,
-          'command-error'
-        );
+        if (!isContinuableJdMcpToolFailure(source, message, recoveryMetadata)) {
+          pushSystemMessageAndEmit(
+            state,
+            recoverable
+              ? `${toolName} failed (recoverable attempt ${recoveryAttempt}/${MAX_RECOVERABLE_TOOL_FAILURES}): ${message}`
+              : `${toolName} failed: ${message}`,
+            'command-error'
+          );
+        }
       }
       emit(state, {
         type: 'tool.execution.failed',
@@ -2908,8 +3568,10 @@ export function createEngine(input: {
         return 'blocked';
       }
       const requiresApproval =
-        toolDescriptor?.requiresApproval ??
-        BUILTIN_TOOL_CATALOG.some((tool) => tool.name === call.toolName && tool.requiresApproval);
+        process.env.AUTO_APPROVE_TOOLS === 'true'
+          ? false
+          : (toolDescriptor?.requiresApproval ??
+             BUILTIN_TOOL_CATALOG.some((tool) => tool.name === call.toolName && tool.requiresApproval));
 
       if (requiresApproval) {
         state.pendingToolQueue = preparedCalls.slice(index + 1);
@@ -3077,7 +3739,7 @@ export function createEngine(input: {
       if (!toolDescriptor) {
         throw new Error(`Background agents cannot use ${call.toolName}`);
       }
-      if (toolDescriptor.requiresApproval) {
+      if (toolDescriptor.requiresApproval && process.env.AUTO_APPROVE_TOOLS !== 'true') {
         throw new Error(`Background agent ${agentId} reached approval-gated tool ${call.toolName}`);
       }
 
@@ -3111,7 +3773,7 @@ export function createEngine(input: {
       draft.status = 'running';
     });
 
-    const maxIterations = 8;
+    const maxIterations = process.env.AUTO_APPROVE_TOOLS === 'true' ? 50 : 8;
     try {
       for (let iteration = 0; iteration < maxIterations; iteration += 1) {
         const activeAgent = findAgentState(state, agentId);
@@ -3222,6 +3884,111 @@ export function createEngine(input: {
     persistState(state);
   }
 
+  function latestFailedActivity(
+    state: SessionState,
+    requestId: string
+  ): EngineToolActivity | null {
+    return state.toolActivity.find((activity) => activity.requestId === requestId && activity.status === 'failed') ?? null;
+  }
+
+  function attachmentsForToolInput(
+    state: SessionState,
+    inputValue: Record<string, unknown>
+  ): EngineAttachment[] {
+    const exactPaths = new Set<string>();
+    const folderPaths = new Set<string>();
+    for (const key of ['file_paths', 'paths']) {
+      const value = inputValue[key];
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (typeof item === 'string' && item.trim()) {
+            exactPaths.add(resolve(item.trim()));
+          }
+        }
+      }
+    }
+    for (const key of ['har_file_path', 'file_path', 'path', 'input_path', 'input']) {
+      const value = inputValue[key];
+      if (typeof value === 'string' && value.trim()) {
+        exactPaths.add(resolve(value.trim()));
+      }
+    }
+    for (const key of ['log_folder', 'log_folder_path', 'folder', 'dump_folder', 'incident_folder', 'workspace_folder']) {
+      const value = inputValue[key];
+      if (typeof value === 'string' && value.trim()) {
+        folderPaths.add(resolve(value.trim()));
+      }
+    }
+
+    return state.attachments.filter((attachment) => {
+      if (attachment.promptVisibility !== 'available' || !existsSync(attachment.localPath)) {
+        return false;
+      }
+      const localPath = resolve(attachment.localPath);
+      return exactPaths.has(localPath) || folderPaths.has(dirname(localPath));
+    });
+  }
+
+  function shouldContinueAfterToolFailure(activity: EngineToolActivity | null): boolean {
+    if (!activity) {
+      return false;
+    }
+    return isContinuableJdMcpToolFailure(
+      activity.source,
+      activity.error ?? '',
+      activity.metadata
+    );
+  }
+
+  function appendToolFailureContinuationPrompt(
+    state: SessionState,
+    activity: EngineToolActivity,
+    attachments: EngineAttachment[]
+  ): void {
+    state.currentAssistantDraft = '';
+    state.reportSuggestion = null;
+    state.session.status = 'running';
+    state.modelHistory.push({
+      role: 'user',
+      content: [
+        `The specialized report generator ${activity.toolName} did not produce a report artifact for this turn.`,
+        'Continue with direct evidence analysis using the uploaded attachment paths, LogScan, Grep, and bounded Read as needed.',
+        'Do not lead with internal tool or report generator failure details.',
+        'Do not include raw internal tool error text unless the user explicitly asks about tooling or report generation.',
+        'If the user explicitly requested a generated report, mention report unavailability only as a brief technical note after the diagnosis.',
+        'Produce a concise support diagnosis grounded in visible file names, log lines, scan summaries, and bounded reads.',
+        attachments.length
+          ? [
+              '',
+              'Available attachment paths:',
+              ...attachments.map((attachment) => `- ${attachment.originalName}: ${attachment.localPath}`)
+            ].join('\n')
+          : ''
+      ].filter(Boolean).join('\n')
+    });
+  }
+
+  async function continueAfterToolFailure(
+    state: SessionState,
+    activity: EngineToolActivity,
+    inputValue: Record<string, unknown>,
+    turnControl: TurnControl
+  ): Promise<void> {
+    const attachments = attachmentsForToolInput(state, inputValue);
+    appendToolFailureContinuationPrompt(state, activity, attachments);
+    if (attachments.length) {
+      await maybeRunLogPreScan(
+        state,
+        'Analyze uploaded diagnostic logs after specialized report failure.',
+        attachments
+      );
+    }
+    await runTurnLoop(state, {
+      turnControl,
+      turnAttachments: attachments
+    });
+  }
+
   async function runTurnLoop(
     state: SessionState,
     options: {
@@ -3234,7 +4001,7 @@ export function createEngine(input: {
       } | null;
     }
   ): Promise<void> {
-    const maxIterations = 8;
+    const maxIterations = process.env.AUTO_APPROVE_TOOLS === 'true' ? 50 : 8;
     let recoverableFailureCount = 0;
     const { turnControl } = options;
 
@@ -3250,11 +4017,41 @@ export function createEngine(input: {
         iteration === 0 && Boolean(options.explicitReportRouting?.reportSuggestion.canRun);
 
       const integrations = getIntegrationSnapshot(state.session.cwd, toolCatalog);
-      const turnSystemPrompt = `${systemPrompt}\n\n${buildRuntimeCapabilityContext(
+      let turnSystemPrompt = `${systemPrompt}\n\n${buildRuntimeCapabilityContext(
         state,
         toolCatalog,
         integrations
-      )}`;
+      )}\n\n${buildProgressDisclosureInstruction()}`;
+
+      if (isOracleFormsSession(state)) {
+        const triageDir = findOracleFormsTriageDir(state.session.cwd);
+        if (triageDir) {
+          try {
+            const mainPromptPath = resolve(triageDir, 'oracle_forms_runtime_analysis_prompt.md');
+            const customerIntakePath = resolve(triageDir, 'references/customer_intake.md');
+            const artifactMapPath = resolve(triageDir, 'references/artifact_map.md');
+            const outputFormatPath = resolve(triageDir, 'references/output_format.md');
+
+            let formsPromptContent = '';
+            if (existsSync(mainPromptPath)) {
+              formsPromptContent += `\n\n# Oracle Forms Support Triage Guidelines\n${readFileSync(mainPromptPath, 'utf8')}`;
+            }
+            if (existsSync(customerIntakePath)) {
+              formsPromptContent += `\n\n## Reference: Customer Intake\n${readFileSync(customerIntakePath, 'utf8')}`;
+            }
+            if (existsSync(artifactMapPath)) {
+              formsPromptContent += `\n\n## Reference: Artifact Map\n${readFileSync(artifactMapPath, 'utf8')}`;
+            }
+            if (existsSync(outputFormatPath)) {
+              formsPromptContent += `\n\n## Reference: Output Format\n${readFileSync(outputFormatPath, 'utf8')}`;
+            }
+
+            turnSystemPrompt += formsPromptContent;
+          } catch (err) {
+            console.error('Failed to load Oracle Forms triage system prompts:', err);
+          }
+        }
+      }
       const modelProgressDetail = options.turnAttachments?.length
         ? formatCount(options.turnAttachments.length, 'file') + ' selected'
         : undefined;
@@ -3264,6 +4061,9 @@ export function createEngine(input: {
         : null;
       let modelProgressCompleted = false;
       let answerProgressStarted = false;
+      let liveAnnouncementProgressId = modelProgressId;
+      let lastAnnouncementLabel: string | null = null;
+      const progressAnnouncements: string[] = [];
       if (modelProgressId) {
         startProgress(state, {
           id: modelProgressId,
@@ -3288,6 +4088,22 @@ export function createEngine(input: {
           }
 
           if (event.type === 'assistant_delta') {
+            const nextDraft = state.currentAssistantDraft + event.text;
+            const announcement = extractProgressAnnouncement(nextDraft);
+            if (announcement && announcement !== lastAnnouncementLabel) {
+              liveAnnouncementProgressId =
+                liveAnnouncementProgressId ??
+                progressId('model.thinking', `${options.progressKey ?? state.session.id}:announcement:${iteration}`);
+              updateRunningProgressLabel(state, {
+                id: liveAnnouncementProgressId,
+                phase: 'model.thinking',
+                label: announcement,
+                attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
+              });
+              lastAnnouncementLabel = announcement;
+              progressAnnouncements.push(announcement);
+              persistState(state);
+            }
             if (modelProgressId && !modelProgressCompleted) {
               completeProgress(state, {
                 id: modelProgressId,
@@ -3306,7 +4122,7 @@ export function createEngine(input: {
               });
               answerProgressStarted = true;
             }
-            state.currentAssistantDraft += event.text;
+            state.currentAssistantDraft = nextDraft;
             continue;
           }
 
@@ -3315,6 +4131,9 @@ export function createEngine(input: {
           }
 
           if (event.type === 'tool_call') {
+            if (liveAnnouncementProgressId) {
+              completeRunningProgress(state, 'model.thinking');
+            }
             if (modelProgressId && !modelProgressCompleted) {
               completeProgress(state, {
                 id: modelProgressId,
@@ -3355,9 +4174,9 @@ export function createEngine(input: {
           state.modelHistory.push({
             role: 'user',
             content: [
-              'The preferred jd-mcp analyzer was not called.',
+              'The preferred specialized analyzer was not called.',
               'Continue now with direct diagnostic log analysis using built-in tools such as Read and Grep.',
-              'Be explicit that no jd-mcp HTML report was generated, then provide the best available findings from the attached log.'
+              'Keep the answer focused on the best available findings from the attached log; mention report unavailability only briefly after the diagnosis if the user explicitly asked about report generation.'
             ].join('\n')
           });
           continue;
@@ -3368,14 +4187,27 @@ export function createEngine(input: {
           input: options.explicitReportRouting!.reportSuggestion.input,
           reasoning:
             queuedCalls[reportCallIndex]!.reasoning ??
-            'The user explicitly requested jd-mcp log analysis for the attached diagnostic file.'
+            'The user explicitly requested specialized log analysis for the attached diagnostic file.'
         };
         state.currentAssistantDraft = '';
       } else if (!queuedCalls.length) {
-        emitAssistantDraftDelta(state);
-        finalizeAssistantDraft(state);
+        emitAssistantDraftDelta(state, progressAnnouncements);
+        finalizeAssistantDraft(state, progressAnnouncements);
+        completeRunningProgress(state, 'model.thinking');
         completeRunningProgress(state, 'answer.preparing');
       } else {
+        const assistantHistoryContent = stripProgressAnnouncementsFromContent(
+          state.currentAssistantDraft,
+          progressAnnouncements,
+          { allowEmpty: true }
+        );
+        if (assistantHistoryContent.trim()) {
+          state.modelHistory.push({
+            role: 'assistant',
+            content: assistantHistoryContent
+          });
+          executeAssistantSlashCommands(state, assistantHistoryContent);
+        }
         state.currentAssistantDraft = '';
       }
 
@@ -3389,6 +4221,7 @@ export function createEngine(input: {
             attachmentIds: options.turnAttachments?.map((attachment) => attachment.id)
           });
         }
+        completeRunningProgress(state, 'model.thinking');
         completeRunningProgress(state, 'answer.preparing');
         state.session.status = 'completed';
         emit(state, {
@@ -3421,6 +4254,18 @@ export function createEngine(input: {
         continue;
       }
       if (toolQueueResult === 'blocked') {
+        const failedActivity = state.toolActivity.find(
+          (activity) => activity.status === 'failed' && activity.source === 'jd-mcp'
+        ) ?? null;
+        if (failedActivity && shouldContinueAfterToolFailure(failedActivity)) {
+          await continueAfterToolFailure(
+            state,
+            failedActivity,
+            failedActivity.input,
+            turnControl
+          );
+          return;
+        }
         emit(state, {
           type: 'turn.completed',
           sessionId: state.session.id,
@@ -3640,7 +4485,7 @@ export function createEngine(input: {
         const suggestion = resolveReportOverrideTarget(state, turnAttachments, toolCatalog);
         if (!suggestion) {
           summary =
-            'No eligible jd-mcp report path is available for the current turn. Attach a supported diagnostic file first.';
+            'No eligible specialized report path is available for the current turn. Attach a supported diagnostic file first.';
           pushSystemMessage(state, createCommandSummary('/report', summary), 'command-error');
           emit(state, {
             type: 'command.error',
@@ -3682,6 +4527,13 @@ export function createEngine(input: {
         const toolUseId = randomUUID();
         const toolDescriptor = findToolDescriptor(toolCatalog, suggestion.suggestedToolName);
         const reasoning = `Report override requested locally for ${suggestion.suggestedToolName}.`;
+        state.modelHistory.push({
+          role: 'user',
+          content: buildModelUserPrompt(
+            'Generate the requested specialized report for the attached diagnostic evidence. If the report generator fails, continue with direct built-in analysis instead of stopping.',
+            turnAttachments
+          )
+        });
         const pendingApproval: PendingApproval = {
           requestId,
           toolUseId,
@@ -3749,13 +4601,14 @@ export function createEngine(input: {
     state: SessionState,
     toolName: string,
     stableStatus: EngineSession['status'],
-    turnAttachments: EngineAttachment[]
+    turnAttachments: EngineAttachment[],
+    prompt: string
   ): Promise<boolean> {
     const toolDescriptor = findToolDescriptor(toolCatalog, toolName);
     if (!toolDescriptor || toolDescriptor.source !== 'jd-mcp') {
       const summary = createGuidedJdMcpUnavailableMessage(
         toolName,
-        'the tool is not available in the current JD MCP catalog.'
+        'the tool is not available in the current specialized tool catalog.'
       );
       pushSystemMessage(state, summary, 'command-error');
       state.session.status = finalizeLocalCommandStatus(state, stableStatus);
@@ -3798,11 +4651,16 @@ export function createEngine(input: {
       return true;
     }
 
+    state.modelHistory.push({
+      role: 'user',
+      content: buildModelUserPrompt(prompt, turnAttachments)
+    });
+
     const requestId = randomUUID();
     const toolUseId = randomUUID();
     const reasoning = `Prepared from guided composer action for ${toolName}.`;
 
-    if (toolDescriptor.requiresApproval) {
+    if (toolDescriptor.requiresApproval && process.env.AUTO_APPROVE_TOOLS !== 'true') {
       state.pendingApprovals.push({
         requestId,
         toolUseId,
@@ -3813,7 +4671,7 @@ export function createEngine(input: {
         reasoning,
         producesReports: toolDescriptor.producesReports,
         requestedAt: new Date().toISOString(),
-        resumeAfterApproval: false
+        resumeAfterApproval: true
       });
       state.session.status = 'awaiting_approval';
       upsertToolActivity(state, {
@@ -3845,6 +4703,7 @@ export function createEngine(input: {
     }
 
     state.session.status = 'running';
+    const turnControl = startTurnControl(state);
     const outcome = await completeToolExecution(
       state,
       requestId,
@@ -3852,17 +4711,35 @@ export function createEngine(input: {
       toolName,
       mapped.input,
       {
-        reasoning
+        reasoning,
+        turnControl
       }
     );
-    const completed = outcome === 'completed';
-    state.session.status = finalizeLocalCommandStatus(state, completed ? 'completed' : 'blocked');
-    emit(state, {
-      type: 'turn.completed',
-      sessionId: state.session.id,
-      status: completed ? 'completed' : 'blocked'
+    if (outcome === 'cancelled') {
+      completeCancelledTurn(state, turnControl);
+      return true;
+    }
+    if (outcome !== 'completed') {
+      const failedActivity = latestFailedActivity(state, requestId);
+      if (failedActivity && shouldContinueAfterToolFailure(failedActivity)) {
+        await continueAfterToolFailure(state, failedActivity, mapped.input, turnControl);
+        return true;
+      }
+      state.session.status = finalizeLocalCommandStatus(state, 'blocked');
+      emit(state, {
+        type: 'turn.completed',
+        sessionId: state.session.id,
+        status: 'blocked'
+      });
+      clearActiveTurn(state, turnControl);
+      persistState(state);
+      return true;
+    }
+
+    await runTurnLoop(state, {
+      turnControl,
+      turnAttachments
     });
-    persistState(state);
     return true;
   }
 
@@ -3906,7 +4783,6 @@ export function createEngine(input: {
         sessionId: session.id,
         cwd
       });
-      persistState(state);
       return session;
     },
 
@@ -3914,6 +4790,7 @@ export function createEngine(input: {
       const persisted = listPersistedSessionSummaries(cwd, ownerId);
       const inMemory = Array.from(sessions.values())
         .filter((state) => state.session.cwd === cwd && ownerCanAccess(state, ownerId))
+        .filter((state) => isMeaningfulSessionRecord(toPersistedRecord(state)))
         .map((state) => {
           const messages = state.messages;
           const createdAt = state.createdAt;
@@ -3985,11 +4862,16 @@ export function createEngine(input: {
     async submitPrompt(sessionId, prompt, options) {
       const state = getSessionState(sessionId, options?.ownerId);
       const stableStatus = state.session.status;
-      const turnAttachments = resolveTurnAttachments(state, options?.attachmentIds);
+      const turnAttachments = resolvePromptAttachments(state, options?.attachmentIds, prompt);
       const previousReportCount = state.reportArtifacts.length;
       const explicitReportRouting = buildExplicitReportSuggestion(prompt, turnAttachments, toolCatalog);
       const visiblePrompt = buildVisibleUserPrompt(prompt, turnAttachments);
-      const userMessage = createMessage('user', visiblePrompt);
+      const userMessage = {
+        ...createMessage('user', visiblePrompt),
+        attachmentIds: turnAttachments.length
+          ? turnAttachments.map((attachment) => attachment.id)
+          : undefined
+      };
       const progressKey = userMessage.id;
       const startedAt = new Date().toISOString();
       state.messages.push(userMessage);
@@ -4012,7 +4894,8 @@ export function createEngine(input: {
             state,
             options.jdMcpToolName,
             stableStatus,
-            turnAttachments
+            turnAttachments,
+            prompt
           )
         ) {
           return;
@@ -4066,6 +4949,10 @@ export function createEngine(input: {
 
       const turnControl = startTurnControl(state);
       try {
+        if (isOracleFormsSession(state)) {
+          await handleOracleFormsAutoInit(state, prompt, turnAttachments);
+        }
+
         await maybeRunLogPreScan(state, prompt, turnAttachments);
 
         await runTurnLoop(state, {
@@ -4193,6 +5080,16 @@ export function createEngine(input: {
         return;
       }
       if (approvalExecutionOutcome !== 'completed') {
+        const failedActivity = latestFailedActivity(state, requestId);
+        if (failedActivity && shouldContinueAfterToolFailure(failedActivity)) {
+          await continueAfterToolFailure(
+            state,
+            failedActivity,
+            resolution.updatedInput ?? pending.input,
+            turnControl
+          );
+          return;
+        }
         emit(state, {
           type: 'turn.completed',
           sessionId,
@@ -4285,24 +5182,8 @@ export function createEngine(input: {
         return null;
       }
 
-      const archiveNames = Array.from(
-        new Set(attachments.map((attachment) => attachment.sourceArchive?.name).filter(Boolean))
-      );
-      const content = archiveNames.length === 1
-        ? `Uploaded ${attachments.length} ${attachments.length === 1 ? 'file' : 'files'} from ${archiveNames[0]}`
-        : `Uploaded ${attachments.length} ${attachments.length === 1 ? 'file' : 'files'}`;
-      const systemMessage: EngineMessage = {
-        ...createMessage('system', content, 'attachment'),
-        attachmentIds: attachments.map((attachment) => attachment.id)
-      };
-      state.messages.push(systemMessage);
-      emit(state, {
-        type: 'message.system',
-        sessionId,
-        message: systemMessage
-      });
       persistState(state);
-      return systemMessage;
+      return null;
     },
 
     removeAttachment(sessionId, attachmentId, ownerId) {
@@ -4370,7 +5251,14 @@ export function createEngine(input: {
       const state = getSessionState(sessionId);
       const turnControl = state.activeTurn;
       if (!turnControl) {
-        await input.provider.cancelTurn(sessionId);
+        try {
+          await input.provider.cancelTurn(sessionId);
+        } catch {
+          // The runtime state still needs to unblock even if no live transport remains.
+        }
+        if (hasStaleRunningWork(state)) {
+          finalizeCancelledTurnState(state);
+        }
         return;
       }
 

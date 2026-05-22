@@ -23,6 +23,10 @@ coverage/
 .superpowers/
 .tmp-dev/
 output/
+.agents/
+scratch/
+customers/
+backend/customers/
 
 # Generated test artifacts
 runtime/tests/**/*.d.ts

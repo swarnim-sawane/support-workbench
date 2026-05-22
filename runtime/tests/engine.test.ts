@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine } from '../src/index.js';
 import { buildLeakedRuntimeSystemPrompt } from '../src/leakedRuntimePrompt.js';
+import { savePersistedSession } from '../src/sessionPersistence.js';
 import type {
   EngineEvent,
   EngineModelEvent,
@@ -65,7 +66,7 @@ describe('createEngine', () => {
     expect(prompt).not.toContain('"tool":"read_file|write_file|shell_command"');
   });
 
-  it('includes expanded jd-mcp tools in the model tool reference when enabled', () => {
+  it('includes expanded specialized tools in the model tool reference when enabled', () => {
     const prompt = buildLeakedRuntimeSystemPrompt([
       {
         name: 'Read',
@@ -75,7 +76,7 @@ describe('createEngine', () => {
       },
       {
         name: 'analyze_har_file',
-        description: 'Analyze a HAR file through jd-mcp.',
+        description: 'Analyze a HAR file through specialized tools.',
         source: 'jd-mcp',
         requiresApproval: true,
         category: 'diagnostics',
@@ -86,7 +87,7 @@ describe('createEngine', () => {
       },
       {
         name: 'list_directory',
-        description: 'List a diagnostic directory through jd-mcp.',
+        description: 'List a diagnostic directory through specialized tools.',
         source: 'jd-mcp',
         requiresApproval: true,
         category: 'helpers',
@@ -97,8 +98,8 @@ describe('createEngine', () => {
       }
     ]);
 
-    expect(prompt).toContain('analyze_har_file(input): Analyze a HAR file through jd-mcp.');
-    expect(prompt).toContain('list_directory(input): List a diagnostic directory through jd-mcp.');
+    expect(prompt).toContain('analyze_har_file(input): Analyze a HAR file through specialized tools.');
+    expect(prompt).toContain('list_directory(input): List a diagnostic directory through specialized tools.');
   });
 
   it('streams an assistant turn from the provider through the engine session', async () => {
@@ -237,6 +238,84 @@ describe('createEngine', () => {
     expect(snapshot.status).toBe('completed');
     expect(snapshot.messages.map((message) => message.content).join('\n')).toContain('Run stopped by user.');
     expect(snapshot.messages.map((message) => message.content).join('\n')).not.toContain('late output');
+  });
+
+  it('stops a restored running session even when the live turn controller is gone', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-stale-running-cancel-'));
+    const sessionId = 'stale-running-session';
+    savePersistedSession(cwd, {
+      ownerId: null,
+      session: {
+        id: sessionId,
+        cwd,
+        status: 'running',
+        activeTurnStartedAt: '2026-04-24T00:00:00.000Z'
+      },
+      createdAt: '2026-04-24T00:00:00.000Z',
+      updatedAt: '2026-04-24T00:05:00.000Z',
+      messages: [
+        {
+          id: 'message-user',
+          role: 'user',
+          content: 'question that got stuck',
+          createdAt: '2026-04-24T00:00:00.000Z'
+        }
+      ],
+      modelHistory: [],
+      pendingApprovals: [],
+      changedFiles: [],
+      workspaceDiffs: [],
+      eventHistory: [],
+      currentAssistantDraft: '',
+      tasks: [],
+      memoryEntries: [],
+      historySummaries: [],
+      progressActivity: [
+        {
+          id: 'answer.preparing:stale-running-session',
+          phase: 'answer.preparing',
+          label: 'Preparing answer',
+          status: 'running',
+          startedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ],
+      toolActivity: [],
+      agents: [],
+      skippedTools: [],
+      reportSuggestion: null,
+      attachments: [],
+      reports: [],
+      branch: null
+    });
+
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {},
+      cancelTurn: vi.fn(async () => {})
+    };
+    const engine = createEngine({ provider });
+    engine.createSession({ cwd, sessionId });
+
+    expect(engine.getSnapshot(sessionId).status).toBe('running');
+
+    await engine.cancelTurn(sessionId);
+
+    const snapshot = engine.getSnapshot(sessionId);
+    expect(provider.cancelTurn).toHaveBeenCalledWith(sessionId);
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.session.activeTurnStartedAt).toBeUndefined();
+    expect(snapshot.messages.at(-1)).toMatchObject({
+      role: 'system',
+      content: 'Run stopped by user.'
+    });
+    expect(snapshot.progressActivity).toEqual([
+      expect.objectContaining({
+        status: 'completed',
+        label: 'Preparing answer'
+      })
+    ]);
   });
 
   it('emits a permission request and pauses before a mutating tool executes', async () => {
@@ -565,11 +644,11 @@ describe('createEngine', () => {
     expect(resumed.history.summaries[0]?.preview).toContain('First prompt');
   });
 
-  it('keeps empty session summary timestamps stable across repeated list reads', () => {
+  it('omits empty sessions from history until they contain messages or evidence', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-24T10:00:00.000Z'));
     try {
-      const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-empty-session-order-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-empty-session-history-'));
       const engine = createEngine({
         provider: {
           async healthCheck() {
@@ -584,21 +663,19 @@ describe('createEngine', () => {
 
       const firstSession = engine.createSession({ cwd, sessionId: 'session-first' });
       vi.setSystemTime(new Date('2026-04-24T10:05:00.000Z'));
-      const secondSession = engine.createSession({ cwd, sessionId: 'session-second' });
+      engine.createSession({ cwd, sessionId: 'session-second' });
 
-      const firstRead = engine.listSessions(cwd);
-      vi.setSystemTime(new Date('2026-04-24T11:00:00.000Z'));
-      const secondRead = engine.listSessions(cwd);
+      expect(engine.listSessions(cwd)).toEqual([]);
 
-      expect(firstRead.map((session) => session.id)).toEqual([secondSession.id, firstSession.id]);
-      expect(secondRead.map((session) => session.id)).toEqual([secondSession.id, firstSession.id]);
-      expect(secondRead).toEqual(firstRead);
+      await engine.submitPrompt(firstSession.id, 'First real case');
+
+      expect(engine.listSessions(cwd).map((session) => session.id)).toEqual([firstSession.id]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('moves an existing session to the top when it is reattached and preserves that order after reload', () => {
+  it('moves an existing session to the top when it is reattached and preserves that order after reload', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-24T10:00:00.000Z'));
     try {
@@ -615,8 +692,10 @@ describe('createEngine', () => {
       const engine = createEngine({ provider });
 
       const firstSession = engine.createSession({ cwd, sessionId: 'session-first' });
+      await engine.submitPrompt(firstSession.id, 'First case');
       vi.setSystemTime(new Date('2026-04-24T10:05:00.000Z'));
       const secondSession = engine.createSession({ cwd, sessionId: 'session-second' });
+      await engine.submitPrompt(secondSession.id, 'Second case');
       expect(engine.listSessions(cwd).map((session) => session.id)).toEqual([
         secondSession.id,
         firstSession.id
@@ -709,6 +788,12 @@ describe('createEngine', () => {
     expect(userTurn?.content).toContain(`@"${imagePath}"`);
     expect(userTurn?.content).toContain('OCR extracted text');
     expect(userTurn?.content).toContain('Fatal: port 4317 already in use');
+
+    const visibleUserMessage = engine.getSnapshot(session.id).messages.find((message) => message.role === 'user');
+    expect(visibleUserMessage).toMatchObject({
+      content: 'inspect the uploaded files',
+      attachmentIds: ['att-text', 'att-image']
+    });
 
     const reattachedEngine = createEngine({ provider });
     reattachedEngine.createSession({ cwd, sessionId });
@@ -808,6 +893,84 @@ describe('createEngine', () => {
     );
   });
 
+  it('shows model progress announcements as progress only and keeps final answers clean', async () => {
+    const executeTool = vi.fn(async () => ({
+      summary: 'Read README.md'
+    }));
+    let sendTurnCount = 0;
+
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        sendTurnCount += 1;
+        if (sendTurnCount === 1) {
+          yield {
+            type: 'assistant_delta',
+            text: "I'll inspect README.md before answering."
+          } satisfies EngineModelEvent;
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: 'README.md'
+            }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'The root cause is documented in README.md.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd: process.cwd() });
+    const log = collectEvents();
+    engine.subscribe(session.id, log.push);
+
+    await engine.submitPrompt(session.id, 'Find the root cause');
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'Read',
+        input: {
+          file_path: 'README.md'
+        }
+      })
+    );
+    expect(
+      log.events
+        .filter((event) => event.type === 'progress.started')
+        .map((event) => (event as { label?: string }).label)
+    ).toContain("I'll inspect README.md before answering.");
+    expect(
+      log.events
+        .filter((event) => event.type === 'progress.started')
+        .map((event) => (event as { label?: string }).label)
+    ).not.toContain('Thinking');
+
+    const assistantTexts = engine
+      .getSnapshot(session.id)
+      .messages.filter((message) => message.role === 'assistant')
+      .map((message) => message.content);
+    expect(assistantTexts.join('\n')).not.toContain("I'll inspect README.md before answering.");
+    expect(assistantTexts.at(-1)).toBe('The root cause is documented in README.md.');
+    expect(
+      log.events
+        .filter((event) => event.type === 'message.assistant.delta')
+        .map((event) => (event as { text?: string }).text)
+        .join('\n')
+    ).not.toContain("I'll inspect README.md before answering.");
+  });
+
   it('permanently deletes persisted sessions, uploads, and workspace-owned report artifacts', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-delete-session-'));
     const sessionId = 'delete-session';
@@ -872,7 +1035,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true
@@ -984,7 +1147,7 @@ describe('createEngine', () => {
     ]);
   });
 
-  it('registers jd-mcp report artifacts and exposes external tool metadata through the runtime snapshot', async () => {
+  it('registers specialized report artifacts and exposes external tool metadata through the runtime snapshot', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-jdmcp-'));
     const reportPath = join(cwd, 'reports', 'adflr-sample-report.html');
     mkdirSync(join(cwd, 'reports'), { recursive: true });
@@ -1011,7 +1174,7 @@ describe('createEngine', () => {
 
         yield {
           type: 'assistant_delta',
-          text: 'The jd-mcp report is ready.'
+          text: 'The specialized report is ready.'
         } satisfies EngineModelEvent;
         yield {
           type: 'assistant_done'
@@ -1021,7 +1184,7 @@ describe('createEngine', () => {
     };
 
     const executeTool = vi.fn(async () => ({
-      summary: 'Generated 1 jd-mcp HTML report',
+      summary: 'Generated 1 specialized HTML report',
       source: 'jd-mcp',
       metadata: {
         provider: 'jd-mcp'
@@ -1054,7 +1217,7 @@ describe('createEngine', () => {
         },
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true
@@ -1074,13 +1237,13 @@ describe('createEngine', () => {
         jdMcp: {
           available: true,
           connected: true,
-          note: 'Connected to jd-mcp',
+          note: 'Connected to specialized tools',
           tools: ['analyze_adf_logs'],
           categories: ['reports'],
           toolDescriptors: [
             {
               name: 'analyze_adf_logs',
-              description: 'Analyze ADF logs through jd-mcp.',
+              description: 'Analyze ADF logs through specialized tools.',
               source: 'jd-mcp',
               requiresApproval: true,
               producesReports: true,
@@ -1150,7 +1313,7 @@ describe('createEngine', () => {
     });
   });
 
-  it('records why jd-mcp report mode was skipped for a single attached log by default', async () => {
+  it('records why specialized report mode was skipped for a single attached log by default', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-routing-'));
     const sessionId = 'single-log-routing';
     const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
@@ -1186,7 +1349,7 @@ describe('createEngine', () => {
         },
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -1516,6 +1679,203 @@ describe('createEngine', () => {
     ).toBe(false);
   });
 
+  it('uses workspace files for evidence prompts even when no composer files are selected', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-implicit-attachments-'));
+    const sessionId = 'implicit-attachment-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+    const firstHarPath = join(uploadDir, 'first.har');
+    const secondHarPath = join(uploadDir, 'second.har');
+    writeFileSync(firstHarPath, JSON.stringify({ log: { entries: [] } }));
+    writeFileSync(secondHarPath, JSON.stringify({ log: { entries: [] } }));
+
+    let sendTurnCount = 0;
+    const provider: EngineModelProvider = {
+      healthCheck: vi.fn(async () => ({ ok: true, provider: 'fake', model: 'fake-model' })),
+      sendTurn: vi.fn(async function* (messages) {
+        sendTurnCount += 1;
+        if (sendTurnCount === 1) {
+          const latest = String(messages.at(-1)?.content ?? '');
+          expect(latest).toContain(firstHarPath);
+          expect(latest).toContain(secondHarPath);
+          yield {
+            type: 'tool_call',
+            toolName: 'analyze_har_file',
+            input: {
+              har_file_path: 'undefined'
+            }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Diagnosis completed from uploaded HAR evidence.'
+        } satisfies EngineModelEvent;
+      }),
+      cancelTurn: vi.fn(async () => {})
+    };
+    const executeTool = vi.fn(async () => ({
+      summary: 'HAR analysis complete',
+      source: 'jd-mcp' as const
+    }));
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_har_file',
+          description: 'Analyze a HAR file through specialized tools.',
+          source: 'jd-mcp',
+          requiresApproval: false,
+          producesReports: false,
+          category: 'diagnostics',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    for (const [id, originalName, localPath] of [
+      ['att-first-har', 'first.har', firstHarPath],
+      ['att-second-har', 'second.har', secondHarPath]
+    ] as const) {
+      engine.addAttachment(session.id, {
+        id,
+        originalName,
+        storedName: originalName,
+        mediaType: 'application/json',
+        kind: 'text',
+        localPath,
+        size: 24,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: '2026-05-20T00:00:00.000Z'
+      });
+    }
+
+    await engine.submitPrompt(session.id, 'diagnose these two files', {
+      attachmentIds: []
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'analyze_har_file',
+        input: expect.objectContaining({
+          har_file_path: firstHarPath
+        })
+      })
+    );
+    expect(
+      executeTool.mock.calls.some((call) => call[0]?.input?.har_file_path === 'undefined')
+    ).toBe(false);
+    expect(engine.getSnapshot(session.id).messages.at(-1)?.content).toContain('Diagnosis completed');
+  });
+
+  it('repairs guessed Read paths to uploaded attachment paths before execution', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-read-path-repair-'));
+    const sessionId = 'read-path-repair-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const smallHarName = '2336486-Performance_issue.har';
+    const largeHarName = '2937373-VBS_slowness_issue.har';
+    const smallHarPath = join(uploadDir, `a1b2c3d4-${smallHarName}`);
+    const largeHarPath = join(uploadDir, `e5f6a7b8-${largeHarName}`);
+    writeFileSync(smallHarPath, JSON.stringify({ log: { entries: [] } }));
+    writeFileSync(largeHarPath, JSON.stringify({ log: { entries: [] } }));
+
+    const guessedBackendPath = join(cwd, 'backend', smallHarName);
+
+    let turnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: guessedBackendPath,
+              offset: 0,
+              limit: 40000
+            }
+          } satisfies EngineModelEvent;
+          yield {
+            type: 'tool_call',
+            toolName: 'Read',
+            input: {
+              file_path: largeHarName,
+              offset: 0,
+              limit: 40000
+            }
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'Both uploaded HAR files were inspected from their upload paths.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const executeTool = vi.fn(async ({ input }: { input: Record<string, unknown> }) => ({
+      summary: `Read ${String(input.file_path ?? '')}`,
+      metadata: { input }
+    }));
+
+    const engine = createEngine({ provider, executeTool });
+    const session = engine.createSession({ cwd, sessionId });
+    for (const [id, originalName, localPath] of [
+      ['att-small-har', smallHarName, smallHarPath],
+      ['att-large-har', largeHarName, largeHarPath]
+    ] as const) {
+      engine.addAttachment(session.id, {
+        id,
+        originalName,
+        storedName: originalName,
+        mediaType: 'application/octet-stream',
+        kind: 'text',
+        localPath,
+        size: 24,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: '2026-05-20T00:00:00.000Z'
+      });
+    }
+
+    await engine.submitPrompt(session.id, 'diagnose these two files', {
+      attachmentIds: ['att-small-har', 'att-large-har']
+    });
+
+    const readCalls = executeTool.mock.calls
+      .map((call) => call[0])
+      .filter((call) => call.toolName === 'Read');
+    expect(readCalls.map((call) => call.input.file_path)).toEqual([
+      smallHarPath,
+      largeHarPath
+    ]);
+    expect(readCalls.some((call) => call.input.file_path === guessedBackendPath)).toBe(false);
+    expect(engine.getSnapshot(session.id).toolActivity).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'Read',
+          status: 'failed',
+          error: expect.stringContaining(guessedBackendPath)
+        })
+      ])
+    );
+  });
+
   it('repairs analyze_access_logs folder input from uploaded access log attachments', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-access-log-input-'));
     const sessionId = 'access-log-input-session';
@@ -1604,9 +1964,10 @@ describe('createEngine', () => {
     expect(executeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: 'analyze_access_logs',
-        input: {
-          log_folder: uploadDir
-        }
+        input: expect.objectContaining({
+          log_folder: uploadDir,
+          file_paths: [vm1Path, vm2Path, vbPath]
+        })
       })
     );
     expect(engine.getSnapshot(session.id).toolActivity).toEqual(
@@ -1614,12 +1975,110 @@ describe('createEngine', () => {
         expect.objectContaining({
           toolName: 'analyze_access_logs',
           status: 'completed',
-          input: {
-            log_folder: uploadDir
-          }
+          input: expect.objectContaining({
+            log_folder: uploadDir,
+            file_paths: [vm1Path, vm2Path, vbPath]
+          })
         })
       ])
     );
+  });
+
+  it('repairs analyze_jvm_logs folder input from uploaded JVM log attachments', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-jvm-log-input-'));
+    const sessionId = 'jvm-log-input-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const node7Path = join(uploadDir, '6368374-repojvm_node7.log');
+    const node8Path = join(uploadDir, '6368374-repojvm_node8.log');
+    writeFileSync(node7Path, 'JVM controller name = repojvm\nError: Unable to log message to the log file.\n');
+    writeFileSync(node8Path, 'Reached maximum sessions. Spawning child JVM\n');
+
+    let turnCount = 0;
+    const provider: EngineModelProvider = {
+      async healthCheck() {
+        return { ok: true, provider: 'fake', model: 'fake-model' };
+      },
+      async *sendTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'analyze_jvm_logs',
+            input: {
+              log_folder: 'undefined'
+            },
+            reasoning: 'Analyze all uploaded JVM Controller logs together'
+          } satisfies EngineModelEvent;
+          return;
+        }
+
+        yield {
+          type: 'assistant_delta',
+          text: 'JVM log analysis completed.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
+      },
+      async cancelTurn() {}
+    };
+    const executeTool = vi.fn(async () => ({
+      summary: 'JVM log analysis complete',
+      source: 'jd-mcp' as const
+    }));
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_jvm_logs',
+          description: 'Analyze JVM Controller logs.',
+          source: 'jd-mcp',
+          requiresApproval: false,
+          producesReports: true,
+          category: 'reports',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    for (const [index, localPath] of [node7Path, node8Path].entries()) {
+      const originalName = localPath.split(/[\\/]/).at(-1)!;
+      engine.addAttachment(session.id, {
+        id: `att-jvm-${index + 1}`,
+        originalName,
+        storedName: originalName,
+        mediaType: 'text/plain',
+        kind: 'text',
+        localPath,
+        size: 64,
+        promptVisibility: 'available',
+        ocrStatus: 'unavailable',
+        uploadedAt: '2026-05-21T00:00:00.000Z'
+      });
+    }
+
+    await engine.submitPrompt(session.id, 'analyse these jvm logs', {
+      attachmentIds: ['att-jvm-1', 'att-jvm-2']
+    });
+
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'analyze_jvm_logs',
+        input: expect.objectContaining({
+          log_folder: uploadDir,
+          file_paths: [node7Path, node8Path]
+        })
+      })
+    );
+    expect(
+      executeTool.mock.calls.some((call) => call[0]?.input?.log_folder === 'undefined')
+    ).toBe(false);
   });
 
   it('pre-scans multiple log attachments before asking the model to analyze them', async () => {
@@ -2257,7 +2716,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2290,9 +2749,10 @@ describe('createEngine', () => {
       expect.objectContaining({
         toolName: 'analyze_adf_logs',
         source: 'jd-mcp',
-        input: {
-          log_folder: uploadDir
-        }
+        input: expect.objectContaining({
+          log_folder: uploadDir,
+          file_paths: [logPath]
+        })
       })
     ]);
     expect(
@@ -2347,7 +2807,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2355,7 +2815,7 @@ describe('createEngine', () => {
           enabled: false,
           visibility: 'unsupported',
           stability: 'stable',
-          reason: 'JD_MCP_ROOT is not configured.'
+          reason: 'Specialized tools root is not configured.'
         }
       ]
     });
@@ -2373,7 +2833,7 @@ describe('createEngine', () => {
       uploadedAt: '2026-04-24T00:00:00.000Z'
     });
 
-    await engine.submitPrompt(session.id, 'run jd-mcp on this log', {
+    await engine.submitPrompt(session.id, 'run specialized tools on this log', {
       attachmentIds: ['att-log']
     });
 
@@ -2389,7 +2849,7 @@ describe('createEngine', () => {
       expect.objectContaining({
         role: 'system',
         kind: 'command-error',
-        content: expect.stringContaining('analyze_adf_logs unavailable: JD_MCP_ROOT is not configured.')
+        content: expect.stringContaining('analyze_adf_logs unavailable: Specialized tools root is not configured.')
       }),
       expect.objectContaining({
         role: 'system',
@@ -2457,7 +2917,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2520,12 +2980,13 @@ describe('createEngine', () => {
       canRun: true,
       reasonCode: 'explicit_tool_request_not_honored',
       input: {
-        log_folder: uploadDir
+        log_folder: uploadDir,
+        file_paths: [logPath]
       }
     });
   });
 
-  it('forces the jd-mcp report path through /report without routing the command to the provider', async () => {
+  it('forces the specialized report path through /report without routing the command to the provider', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-command-'));
     const sessionId = 'report-command-session';
     const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
@@ -2542,7 +3003,7 @@ describe('createEngine', () => {
       cancelTurn: vi.fn(async () => {})
     };
     const executeTool = vi.fn(async () => ({
-      summary: 'Generated 1 jd-mcp HTML report',
+      summary: 'Generated 1 specialized HTML report',
       source: 'jd-mcp'
     }));
 
@@ -2558,7 +3019,7 @@ describe('createEngine', () => {
         },
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2592,9 +3053,10 @@ describe('createEngine', () => {
       expect.objectContaining({
         toolName: 'analyze_adf_logs',
         source: 'jd-mcp',
-        input: {
-          log_folder: uploadDir
-        }
+        input: expect.objectContaining({
+          log_folder: uploadDir,
+          file_paths: [logPath]
+        })
       })
     ]);
 
@@ -2606,16 +3068,17 @@ describe('createEngine', () => {
     expect(executeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: 'analyze_adf_logs',
-        input: {
-          log_folder: uploadDir
-        }
+        input: expect.objectContaining({
+          log_folder: uploadDir,
+          file_paths: [logPath]
+        })
       })
     );
     expect(provider.sendTurn).not.toHaveBeenCalled();
     expect(engine.getSnapshot(session.id).status).toBe('completed');
   });
 
-  it('prepares guided JD MCP composer invocations with exact attachment payloads', async () => {
+  it('prepares guided specialized composer invocations with exact attachment payloads', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-guided-jd-mcp-'));
     const sessionId = 'guided-jd-mcp-session';
     const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
@@ -2626,10 +3089,23 @@ describe('createEngine', () => {
     writeFileSync(harPath, JSON.stringify({ log: { entries: [] } }));
     writeFileSync(logPath, 'ECID=abc123');
 
+    let providerConsumed = false;
     const provider: EngineModelProvider = {
       healthCheck: vi.fn(async () => ({ ok: true, provider: 'fake', model: 'fake-model' })),
-      sendTurn: vi.fn(async function* () {
-        return;
+      sendTurn: vi.fn(async function* (messages) {
+        providerConsumed = true;
+        expect(messages.at(-1)).toMatchObject({
+          role: 'tool',
+          toolName: 'correlate_har_with_logs',
+          content: expect.stringContaining('correlation complete')
+        });
+        yield {
+          type: 'assistant_delta',
+          text: 'Correlation answer after specialized tool.'
+        } satisfies EngineModelEvent;
+        yield {
+          type: 'assistant_done'
+        } satisfies EngineModelEvent;
       }),
       cancelTurn: vi.fn(async () => {})
     };
@@ -2713,9 +3189,124 @@ describe('createEngine', () => {
         }
       })
     );
+    expect(provider.sendTurn).toHaveBeenCalledTimes(1);
+    expect(providerConsumed).toBe(true);
+    expect(engine.getSnapshot(session.id).messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'assistant',
+          content: 'Correlation answer after specialized tool.'
+        })
+      ])
+    );
   });
 
-  it('surfaces failed /report executions and clears the stale report suggestion', async () => {
+  it('continues with a normal answer when a guided specialized report fails after approval', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-guided-report-failure-'));
+    const sessionId = 'guided-report-failure-session';
+    const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
+    mkdirSync(uploadDir, { recursive: true });
+
+    const logPath = join(uploadDir, 'DefaultServer-diagnostic.log');
+    writeFileSync(logPath, '[2026-05-18T08:46:49.000+00:00] [DefaultServer] [ERROR] [oracle.adf] test');
+
+    const provider: EngineModelProvider = {
+      healthCheck: vi.fn(async () => ({ ok: true, provider: 'fake', model: 'fake-model' })),
+      sendTurn: vi.fn(async function* (messages) {
+        const promptText = messages.map((message) => message.content).join('\n');
+        expect(promptText).toContain('Continue with direct evidence analysis');
+        expect(promptText).toContain('Do not lead with internal tool or report generator failure details.');
+        expect(promptText).not.toContain('specialized report tool failed');
+        expect(promptText).not.toContain('NullPointerException');
+        yield {
+          type: 'assistant_delta',
+          text: 'Fallback answer from built-in evidence analysis.'
+        } satisfies EngineModelEvent;
+      }),
+      cancelTurn: vi.fn(async () => {})
+    };
+    const executeTool = vi.fn(async () => {
+      throw new Error(
+        'Exception in thread "main" java.lang.NullPointerException: Cannot invoke "oracle.jtech.la.LogMessage.setMsg(String)" because "logM" is null'
+      );
+    });
+
+    const engine = createEngine({
+      provider,
+      executeTool,
+      toolCatalog: [
+        {
+          name: 'analyze_adf_logs',
+          description: 'Analyze ADF logs through specialized tools.',
+          source: 'jd-mcp',
+          requiresApproval: true,
+          producesReports: true,
+          category: 'reports',
+          enabled: true,
+          visibility: 'enabled',
+          stability: 'stable'
+        }
+      ]
+    });
+    const session = engine.createSession({ cwd, sessionId });
+    engine.addAttachment(session.id, {
+      id: 'att-log',
+      originalName: 'DefaultServer-diagnostic.log',
+      storedName: 'DefaultServer-diagnostic.log',
+      mediaType: 'text/plain',
+      kind: 'text',
+      localPath: logPath,
+      size: 86,
+      promptVisibility: 'available',
+      ocrStatus: 'unavailable',
+      uploadedAt: '2026-04-24T00:00:00.000Z'
+    });
+
+    await engine.submitPrompt(session.id, 'Analyze this ADF diagnostic log', {
+      attachmentIds: ['att-log'],
+      jdMcpToolName: 'analyze_adf_logs'
+    });
+
+    const approval = engine.getPendingApprovals(session.id)[0];
+    expect(approval).toMatchObject({
+      toolName: 'analyze_adf_logs',
+      input: {
+        log_folder: uploadDir,
+        file_paths: [logPath]
+      }
+    });
+
+    await engine.resolveApproval(session.id, approval!.requestId, {
+      decision: 'allow'
+    });
+
+    const snapshot = engine.getSnapshot(session.id);
+    expect(snapshot.status).toBe('completed');
+    expect(snapshot.reportSuggestion).toBeNull();
+    expect(snapshot.toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'analyze_adf_logs',
+          status: 'failed'
+        })
+      ])
+    );
+    expect(snapshot.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: expect.stringContaining('Fallback answer')
+    });
+    expect(snapshot.messages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          kind: 'command-error',
+          content: expect.stringContaining('analyze_adf_logs failed')
+        })
+      ])
+    );
+  });
+
+  it('surfaces failed /report executions and clears the stale report suggestion without blocking analysis', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-report-command-failure-'));
     const sessionId = 'report-command-failure-session';
     const uploadDir = join(cwd, '.claude-oca', 'uploads', sessionId);
@@ -2746,7 +3337,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2788,16 +3379,19 @@ describe('createEngine', () => {
     });
 
     const snapshot = engine.getSnapshot(session.id);
-    expect(snapshot.status).toBe('blocked');
+    expect(snapshot.status).toBe('completed');
     expect(snapshot.reportSuggestion).toBeNull();
-    expect(snapshot.toolActivity[0]).toMatchObject({
-      toolName: 'analyze_adf_logs',
-      status: 'failed'
-    });
+    expect(snapshot.toolActivity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: 'analyze_adf_logs',
+          status: 'failed'
+        })
+      ])
+    );
     expect(snapshot.messages.at(-1)).toMatchObject({
-      role: 'system',
-      kind: 'command-error',
-      content: expect.stringContaining('analyze_adf_logs failed: Exception in thread "main"')
+      role: 'assistant',
+      content: expect.stringContaining('Direct analysis result')
     });
   });
 
@@ -2826,7 +3420,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           producesReports: true,
@@ -2834,7 +3428,7 @@ describe('createEngine', () => {
           enabled: false,
           visibility: 'unsupported',
           stability: 'stable',
-          reason: 'JD_MCP_ROOT is not configured.'
+          reason: 'Specialized tools root is not configured.'
         }
       ]
     });
@@ -2867,7 +3461,7 @@ describe('createEngine', () => {
       expect.objectContaining({
         role: 'system',
         kind: 'command-error',
-        content: expect.stringContaining('No jd-mcp report was generated because analyze_adf_logs is unavailable here')
+        content: expect.stringContaining('No specialized report was generated because analyze_adf_logs is unavailable here')
       })
     ]);
   });
@@ -2976,7 +3570,7 @@ describe('createEngine', () => {
       toolCatalog: [
         {
           name: 'analyze_adf_logs',
-          description: 'Analyze ADF logs through jd-mcp.',
+          description: 'Analyze ADF logs through specialized tools.',
           source: 'jd-mcp',
           requiresApproval: true,
           category: 'reports',
@@ -2984,7 +3578,7 @@ describe('createEngine', () => {
           enabled: false,
           visibility: 'unsupported',
           stability: 'stable',
-          reason: 'JD_MCP_ROOT is not configured.'
+          reason: 'Specialized tools root is not configured.'
         }
       ]
     });
@@ -3004,7 +3598,7 @@ describe('createEngine', () => {
           type: 'tool.execution.failed',
           toolName: 'analyze_adf_logs',
           recoverable: false,
-          error: expect.stringContaining('JD_MCP_ROOT is not configured')
+          error: expect.stringContaining('Specialized tools root is not configured')
         }),
         expect.objectContaining({
           type: 'message.system',
@@ -3023,7 +3617,7 @@ describe('createEngine', () => {
         toolName: 'analyze_adf_logs',
         status: 'failed',
         recoverable: false,
-        error: expect.stringContaining('JD_MCP_ROOT is not configured')
+        error: expect.stringContaining('Specialized tools root is not configured')
       })
     ]);
   });

@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useRef, useState, type DragEvent } from 'react';
-import { AlertTriangle, PanelRightOpen, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, MessageSquare, PanelRightOpen, X } from 'lucide-react';
 import { AppRail } from './components/AppRail';
 import { ApprovalOverlay } from './components/ApprovalOverlay';
 import { ChatHeader, type WorkbenchTheme } from './components/ChatHeader';
@@ -7,9 +7,8 @@ import { Composer } from './components/Composer';
 import { DocumentationPage } from './components/DocumentationPage';
 import { HelpDrawer } from './components/HelpDrawer';
 import { MessageList } from './components/MessageList';
-import { ReportViewerDrawer } from './components/ReportViewerDrawer';
 import { WorkspaceSidebar, type WorkspaceTab } from './components/WorkspaceSidebar';
-import { formatBytes } from './components/utils';
+import { buildChatReportCardId, formatBytes } from './components/utils';
 import type {
   WorkbenchHealth,
   WorkbenchSessionSnapshot,
@@ -47,9 +46,21 @@ type UploadToast = {
   name: string;
   size: number;
   message: string;
+  tone: 'ok' | 'danger';
 };
 
 const UPLOAD_TOAST_TIMEOUT_MS = 5600;
+
+function isEmbeddedWorkbench(): boolean {
+  return new URLSearchParams(window.location.search).get('embedded') === '1';
+}
+
+function readThemeFromUrl(): WorkbenchTheme | null {
+  const themeParam = new URLSearchParams(window.location.search).get('theme');
+  return themeParam === 'light' || themeParam === 'dark' || themeParam === 'redwood'
+    ? themeParam
+    : null;
+}
 
 export function App({
   snapshot,
@@ -71,6 +82,7 @@ export function App({
   isBooting = false,
   error = null
 }: AppProps) {
+  const isEmbedded = isEmbeddedWorkbench();
   const deferredMessages = useDeferredValue(snapshot.messages);
   const availableAttachments = snapshot.attachments.filter(
     (attachment) => attachment.promptVisibility === 'available'
@@ -79,13 +91,12 @@ export function App({
     queuedAttachmentIds.includes(attachment.id)
   );
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
-  const [reportViewerOpen, setReportViewerOpen] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('files');
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
-  const [leftRailOpen, setLeftRailOpen] = useState(true);
-  const [theme, setTheme] = useState<WorkbenchTheme>('light');
+  const [leftRailOpen, setLeftRailOpen] = useState(() => !isEmbedded);
+  const [theme, setTheme] = useState<WorkbenchTheme>(() => readThemeFromUrl() ?? 'light');
   const [helpOpen, setHelpOpen] = useState(false);
-  const [documentationOpen, setDocumentationOpen] = useState(() => window.location.pathname === '/docs');
+  const [documentationOpen, setDocumentationOpen] = useState(() => !isEmbedded && window.location.pathname === '/docs');
   const [composerDraft, setComposerDraft] = useState('');
   const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -112,7 +123,6 @@ export function App({
     if (!snapshot.reports.artifacts.length) {
       previousReportIdsRef.current = [];
       setSelectedReportId(null);
-      setReportViewerOpen(false);
       return;
     }
 
@@ -137,18 +147,22 @@ export function App({
 
   useEffect(() => {
     for (const item of uploadItems) {
-      if (item.stage !== 'failed' || shownUploadToastIdsRef.current.has(item.id)) {
+      if ((item.stage !== 'ready' && item.stage !== 'failed') || shownUploadToastIdsRef.current.has(item.id)) {
         continue;
       }
 
       shownUploadToastIdsRef.current.add(item.id);
+      const failed = item.stage === 'failed';
       setUploadToasts((current) => [
         ...current,
         {
           id: item.id,
           name: item.name,
           size: item.size,
-          message: item.error ?? item.message ?? 'Upload failed'
+          message: failed
+            ? (item.error ?? item.message ?? 'Upload failed')
+            : 'Uploaded to workspace and added to this chat',
+          tone: failed ? 'danger' : 'ok'
         }
       ]);
 
@@ -171,19 +185,29 @@ export function App({
 
   const reportSuggestion = snapshot.reportSuggestion;
   const showThinking = shouldShowThinking(snapshot);
-  const selectedReport =
-    snapshot.reports.artifacts.find((artifact) => artifact.id === selectedReportId) ??
-    snapshot.reports.artifacts[0] ??
-    null;
 
   function openReport(reportId: string) {
     setSelectedReportId(reportId);
-    setReportViewerOpen(true);
+    window.requestAnimationFrame(() => {
+      const reportCard = document.getElementById(buildChatReportCardId(reportId));
+      if (!reportCard) {
+        return;
+      }
+
+      if (typeof reportCard.scrollIntoView === 'function') {
+        reportCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      if (reportCard instanceof HTMLElement) {
+        reportCard.focus({ preventScroll: true });
+      }
+    });
   }
 
   function openDocumentation() {
+    if (isEmbedded) {
+      return;
+    }
     setHelpOpen(false);
-    setReportViewerOpen(false);
     setDocumentationOpen(true);
     if (window.location.pathname !== '/docs') {
       window.history.pushState({}, '', '/docs');
@@ -257,6 +281,15 @@ export function App({
     setIsSubmittingPrompt(false);
   }
 
+  async function handleNewSession() {
+    setComposerDraft('');
+    setSelectedReportId(null);
+    const result = onNewSession();
+    if (isPromiseLike(result)) {
+      await result;
+    }
+  }
+
   function hasDraggedFiles(event: DragEvent) {
     return Array.from(event.dataTransfer.types).includes('Files');
   }
@@ -316,7 +349,6 @@ export function App({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        setReportViewerOpen(false);
         setHelpOpen(false);
       }
     }
@@ -327,12 +359,12 @@ export function App({
 
   useEffect(() => {
     function onPopState() {
-      setDocumentationOpen(window.location.pathname === '/docs');
+      setDocumentationOpen(!isEmbedded && window.location.pathname === '/docs');
     }
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [isEmbedded]);
 
   useEffect(() => {
     const scroller = chatScrollRef.current;
@@ -368,32 +400,54 @@ export function App({
   ]);
 
   return (
-    <div className="app-shell" data-theme={theme} data-left-rail={leftRailOpen ? 'open' : 'collapsed'}>
-      <AppRail
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        leftRailOpen={leftRailOpen}
-        isLoading={isBooting}
-        onToggleLeftRail={() => setLeftRailOpen((current) => !current)}
-        onNewSession={onNewSession}
-        onSelectSession={onSelectSession}
-        onDeleteSession={onDeleteSession}
-      />
+    <div
+      className="app-shell"
+      data-theme={theme}
+      data-left-rail={leftRailOpen ? 'open' : 'collapsed'}
+      data-embedded={isEmbedded ? 'true' : 'false'}
+    >
+      {!isEmbedded || leftRailOpen ? (
+        <AppRail
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          leftRailOpen={leftRailOpen}
+          isLoading={isBooting}
+          onToggleLeftRail={() => setLeftRailOpen((current) => !current)}
+          onNewSession={handleNewSession}
+          onSelectSession={onSelectSession}
+          onDeleteSession={onDeleteSession}
+        />
+      ) : null}
+
+      {isEmbedded && !leftRailOpen ? (
+        <button
+          type="button"
+          className="embedded-chat-drawer-button"
+          aria-label="Open chat history"
+          title="Open chat history"
+          onClick={() => setLeftRailOpen(true)}
+        >
+          <MessageSquare size={15} aria-hidden="true" />
+          <span>Chats</span>
+        </button>
+      ) : null}
 
       <div className="workbench-frame">
-        <ChatHeader
-          health={health}
-          error={error}
-          theme={theme}
-          isDocumentationOpen={documentationOpen}
-          onDownloadChat={downloadChat}
-          onSetTheme={setTheme}
-          onOpenHelp={() => setHelpOpen(true)}
-          onOpenDocumentation={openDocumentation}
-          onBackToWorkbench={backToWorkbench}
-        />
+        {!isEmbedded ? (
+          <ChatHeader
+            health={health}
+            error={error}
+            theme={theme}
+            isDocumentationOpen={documentationOpen}
+            onDownloadChat={downloadChat}
+            onSetTheme={setTheme}
+            onOpenHelp={() => setHelpOpen(true)}
+            onOpenDocumentation={openDocumentation}
+            onBackToWorkbench={backToWorkbench}
+          />
+        ) : null}
 
-        {documentationOpen ? (
+        {documentationOpen && !isEmbedded ? (
           <DocumentationPage onBackToWorkbench={backToWorkbench} />
         ) : (
           <main className="shell-main" data-workspace-layout={workspaceOpen ? 'open' : 'closed'}>
@@ -407,9 +461,9 @@ export function App({
                   messages={deferredMessages}
                   snapshot={snapshot}
                   reportSuggestion={reportSuggestion}
+                  selectedReportId={selectedReportId}
                   isBooting={isBooting}
                   showThinking={showThinking}
-                  onOpenReport={openReport}
                   onPromptSubmit={handlePromptSubmit}
                 />
               </section>
@@ -484,12 +538,6 @@ export function App({
         jdMcp={snapshot.integrations.jdMcp}
         onClose={() => setHelpOpen(false)}
       />
-      <ReportViewerDrawer
-        sessionId={snapshot.sessionId}
-        report={selectedReport}
-        open={reportViewerOpen}
-        onClose={() => setReportViewerOpen(false)}
-      />
       <UploadToastRegion toasts={uploadToasts} onDismiss={dismissUploadToast} />
     </div>
   );
@@ -509,9 +557,13 @@ function UploadToastRegion({
   return (
     <div className="toast-region" role="region" aria-label="Upload notifications">
       {toasts.map((toast) => (
-        <article key={toast.id} className="upload-toast" role="alert">
+        <article
+          key={toast.id}
+          className={`upload-toast tone-${toast.tone}`}
+          role={toast.tone === 'danger' ? 'alert' : 'status'}
+        >
           <span className="upload-toast-icon" aria-hidden="true">
-            <AlertTriangle size={16} />
+            {toast.tone === 'danger' ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
           </span>
           <span className="upload-toast-copy">
             <strong title={toast.name}>{toast.name}</strong>
@@ -544,7 +596,7 @@ function buildChatDownload(snapshot: WorkbenchSessionSnapshot): string {
     ''
   ];
 
-  for (const message of snapshot.messages) {
+  for (const message of snapshot.messages.filter((item) => item.kind !== 'attachment')) {
     lines.push(`## ${message.role}${message.kind && message.kind !== 'default' ? ` (${message.kind})` : ''}`);
     lines.push('');
     lines.push(message.content);

@@ -61,7 +61,7 @@ Slash commands are the fastest way to start a structured investigation.
 Common entry points include:
 
 - \`/commands\` to list the command set exposed by the current runtime
-- \`/report\` to force the configured report path when the queued evidence supports it
+- \`/report\` to force the configured report path when the selected evidence supports it
 - \`/session\` to inspect the current session metadata and runtime state
 - \`/diff\` to review tracked workspace changes from the runtime
 - \`/skills\` and \`/config\` to inspect local integrations when diagnosing environment setup
@@ -78,7 +78,7 @@ The help drawer reads from the runtime command catalog, so it should only advert
     content: `
 Upload files when the evidence should travel with the session.
 
-The workbench supports individual files, screenshots, text logs, and ZIP bundles. Uploaded items appear in the workspace panel and can be queued into later prompts without re-uploading them.
+The workbench supports individual files, screenshots, text logs, and ZIP bundles. Uploaded items appear in the workspace panel and can be added to later chat prompts without re-uploading them.
 
 Good habits:
 
@@ -129,35 +129,37 @@ The goal is not to slow down the workflow. The goal is to make local execution i
 `
   },
   {
-    id: 'oca-and-jd-mcp',
-    title: 'OCA and JD MCP integration',
+    id: 'oca-and-specialized-tools',
+    title: 'OCA and specialized tools',
     summary: 'What the model and diagnostic bridge do at a user-facing level.',
     icon: 'integration',
     content: `
 The workbench uses an OCA-compatible model provider for chat and reasoning.
 
-When JD MCP is available, product-specific analyzer tools can run behind the scenes and return structured output or report artifacts. When it is unavailable, the core chat, uploads, and local analysis flow still remain useful.
+When specialized tools are available, product-specific report tools can be selected on demand from the compact **Specialized tools** picker in the composer. When they are unavailable, the core chat, uploads, and local analysis flow still remain useful.
 
 In normal use:
 
 - the model explains, summarizes, and chooses next diagnostic steps
 - local tools inspect files, session state, and workspace context
-- JD MCP tools provide deeper product-specific reports when configured
+- specialized report tools provide deeper product-specific HTML artifacts when configured
 - the health pill and runtime trace help show what path was used
 
-The Help drawer lists the JD MCP descriptor catalog reported by the runtime, including disabled tools and prerequisite reasons such as missing JD MCP root, missing Java/JDTOOLS configuration, missing jdtools.jar, or missing FORMS_HOME.
+The Help drawer lists the specialized tool catalog reported by the runtime, including disabled tools and prerequisite reasons such as missing tool root, missing Java/JDTOOLS configuration, missing jdtools.jar, or missing FORMS_HOME.
 
-Common guided composer actions include:
+Use **Specialized tools** when you specifically want a generated report from an enabled analyzer, such as:
 
-- Analyze HAR with \`analyze_har_file\`
-- Correlate HAR with server logs using \`correlate_har_with_logs\`
-- Analyze WebLogic/OHS access logs with \`analyze_access_logs\`
-- Analyze ADF, Forms, or Reports ODL logs with \`analyze_adf_logs\`
-- Analyze thread dumps with \`analyze_thread_dumps\`
-- Translate Forms traces with \`translate_forms_trace\`
-- Pre-scan unknown text diagnostics with \`triage_text_diagnostics\`
+- access logs
+- ADF/ODL logs
+- ADF performance logs
+- JBO activity
+- JDBC leak dumps
+- Forms traces
+- thread dumps
+- JDeveloper workspaces
+- ADR incident folders
 
-Advanced JD MCP tools remain available when their descriptors are enabled, but common support workflows should start from the visible composer actions instead of requiring memorized slash commands.
+HAR analysis and HAR-to-log correlation remain available through the normal chat and support commands where configured, but they are not shown as specialized report actions unless the runtime advertises them as report-producing tools.
 
 If a report was not generated, the session should explain whether the analyzer was unavailable, skipped, or not relevant for that source.
 `
@@ -172,7 +174,7 @@ Use this flow when a support case starts with incomplete or noisy evidence:
 
 1. Start a new chat for the issue or select the existing session for the same case
 2. Upload the smallest useful evidence bundle
-3. Queue the relevant files and run the most specific available slash command for the question
+3. Add the relevant files to chat and either ask a focused question or select the most specific available specialized report tool
 4. Review approvals and generated runtime events before continuing
 5. Open any report artifact and confirm it matches the uploaded source
 6. Ask a focused follow-up question, such as "what is the strongest evidence for the root cause?"

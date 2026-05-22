@@ -1,7 +1,7 @@
 import { ExternalLink, X } from 'lucide-react';
 import { useEffect } from 'react';
 import type { WorkbenchReportArtifact } from '../types';
-import { buildReportPath, formatBytes } from './utils';
+import { buildReportPath, formatBytes, formatToolSource } from './utils';
 
 type ReportViewerDrawerProps = {
   sessionId: string;
@@ -37,7 +37,7 @@ export function ReportViewerDrawer({ sessionId, report, open, onClose }: ReportV
           <p className="eyebrow">HTML Report</p>
           <h2>{report.title}</h2>
           <small>
-            {report.toolName} - {report.source} - {formatBytes(report.size)}
+            {report.toolName} - {formatToolSource(report.source)} - {formatBytes(report.size)}
           </small>
         </div>
         <div className="report-viewer-actions">

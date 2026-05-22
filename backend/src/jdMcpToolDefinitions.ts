@@ -27,7 +27,7 @@ export const JD_MCP_TOOL_DEFINITIONS: JdMcpToolDefinition[] = [
   },
   {
     name: 'analyze_thread_dumps',
-    description: 'Analyze thread dumps from a folder or ZIP files and generate a jd-mcp HTML report.',
+    description: 'Analyze thread dumps from a folder or ZIP files and generate a specialized HTML report.',
     category: 'reports',
     producesReports: true,
     stability: 'stable',

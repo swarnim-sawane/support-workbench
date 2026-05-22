@@ -40,39 +40,63 @@ export function buildReportPath(sessionId: string, reportId: string): string {
   return `/api/session/${sessionId}/reports/${reportId}/content`;
 }
 
+export function buildChatReportCardId(reportId: string): string {
+  return `chat-report-${reportId}`;
+}
+
 export function buildIntegrationStatus(snapshot: WorkbenchSessionSnapshot): string {
   if (snapshot.integrations.jdMcp.connected) {
-    return 'jd-mcp connected';
+    return 'Specialized tools connected';
   }
   if (snapshot.integrations.jdMcp.available) {
-    return 'jd-mcp available';
+    return 'Specialized tools partially configured';
   }
-  return 'jd-mcp unavailable';
+  return 'Specialized tools unavailable';
+}
+
+export function formatToolSource(source: string | undefined): string {
+  return source === 'jd-mcp' ? 'Specialized tools' : source ?? 'unknown';
+}
+
+export function formatSpecializedToolText(text: string | undefined): string {
+  return (text ?? '')
+    .replace(/JD_MCP_ROOT/g, 'Specialized tools root')
+    .replace(/JD_MCP_JDTOOLS_JAVA/g, 'Specialized tools Java path')
+    .replace(/JD_MCP_JDTOOLS_DIR/g, 'Specialized tools directory')
+    .replace(/JD_MCP_FORMS_HOME/g, 'Specialized tools Forms home')
+    .replace(/\bJD MCP HTML report(s?)\b/gi, 'specialized HTML report$1')
+    .replace(/\bjd-mcp HTML report(s?)\b/gi, 'specialized HTML report$1')
+    .replace(/\bJD MCP report(s?)\b/gi, 'specialized report$1')
+    .replace(/\bjd-mcp report(s?)\b/gi, 'specialized report$1')
+    .replace(/\bJD MCP\b/gi, 'Specialized tools')
+    .replace(/\bjd-mcp\b/gi, 'Specialized tools');
 }
 
 export function buildToolDescriptorLabel(
   tool: WorkbenchSessionSnapshot['integrations']['jdMcp']['toolDescriptors'][number]
 ): string {
   if (tool.visibility === 'unsupported') {
-    return `${tool.name} unavailable${tool.reason ? `: ${tool.reason}` : ''}`;
+    return formatSpecializedToolText(
+      `${tool.name} unavailable${tool.reason ? `: ${tool.reason}` : ''}`
+    );
   }
   return tool.name;
 }
 
 export function buildToolActivitySummary(activity: WorkbenchToolActivity): string {
   if (activity.status === 'completed') {
-    return activity.summary ?? 'Completed';
+    return formatSpecializedToolText(activity.summary ?? 'Completed');
   }
   if (activity.status === 'failed') {
-    return activity.error ?? 'Failed';
+    return formatSpecializedToolText(activity.error ?? 'Failed');
   }
   if (activity.status === 'denied') {
-    return activity.error ? `Denied: ${activity.error}` : 'Denied';
+    return formatSpecializedToolText(activity.error ? `Denied: ${activity.error}` : 'Denied');
   }
   if (activity.status === 'running') {
     return 'Running now';
   }
-  return activity.reasoning ?? 'Waiting for approval';
+  return formatSpecializedToolText(activity.reasoning ?? 'Waiting for approval');
 }
 
 export function buildFriendlyToolActivityTitle(activity: WorkbenchToolActivity): string {
@@ -113,6 +137,10 @@ export function buildFriendlyToolActivityTitle(activity: WorkbenchToolActivity):
     case 'read_logs':
     case 'triage_text_diagnostics':
       return active ? 'Running log analysis' : 'Analyzed logs';
+    case 'analyze_har_file':
+      return active ? 'Analyzing HAR capture' : 'Analyzed HAR capture';
+    case 'correlate_har_with_logs':
+      return active ? 'Correlating HAR and logs' : 'Correlated HAR and logs';
     case 'Agent':
       return active ? 'Running background investigation' : 'Finished background investigation';
     case 'TaskOutput':

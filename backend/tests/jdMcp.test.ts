@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { JdMcpBridge, normalizeJdMcpToolInput } from '../src/jdMcp.js';
@@ -169,6 +169,53 @@ describe('JdMcpBridge', () => {
     });
   });
 
+  it('normalizes HAR analyzer path aliases into har_file_path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-oca-har-upload-'));
+    const filePath = join(root, 'capture.har');
+    writeFileSync(filePath, JSON.stringify({ log: { entries: [] } }));
+
+    expect(normalizeJdMcpToolInput('analyze_har_file', { input: filePath })).toEqual({
+      har_file_path: filePath
+    });
+    expect(normalizeJdMcpToolInput('analyze_har_file', { file_path: filePath })).toEqual({
+      har_file_path: filePath
+    });
+  });
+
+  it('builds a filtered analyzer folder from selected compatible ADF diagnostic files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-oca-mixed-logs-'));
+    const diagnosticPath = join(root, 'DefaultServer-diagnostic.log');
+    const accessPath = join(root, 'access.log');
+    const reportsJvmPath = join(root, 'repojvm_node7.log');
+    writeFileSync(diagnosticPath, '[2026-05-18T08:46:49.000+00:00] [DefaultServer] [ERROR] [oracle.adf] test');
+    writeFileSync(accessPath, 'GET /ords HTTP/1.1" 200 14 120');
+    writeFileSync(reportsJvmPath, 'Wed 25 Mar 2026 11:24:15 AM EET::JVM PID 1406948: Instructions received.');
+
+    const normalized = normalizeJdMcpToolInput('analyze_adf_logs', {
+      log_folder: root,
+      file_paths: [diagnosticPath, accessPath, reportsJvmPath]
+    });
+
+    expect(normalized.log_folder).not.toBe(root);
+    expect(readdirSync(String(normalized.log_folder))).toContain('DefaultServer-diagnostic.log');
+    expect(readdirSync(String(normalized.log_folder))).not.toContain('access.log');
+    expect(readdirSync(String(normalized.log_folder))).not.toContain('repojvm_node7.log');
+    expect(normalized).not.toHaveProperty('file_paths');
+  });
+
+  it('rejects ADF analyzer input when selected logs are not ODL diagnostic logs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-oca-plain-logs-'));
+    const reportsJvmPath = join(root, 'repojvm_node7.log');
+    writeFileSync(reportsJvmPath, 'Wed 25 Mar 2026 11:24:15 AM EET::JVM PID 1406948: Instructions received.');
+
+    expect(() =>
+      normalizeJdMcpToolInput('analyze_adf_logs', {
+        log_folder: root,
+        file_paths: [reportsJvmPath]
+      })
+    ).toThrow('No compatible ADF diagnostic log files were found');
+  });
+
   it('rejects missing access log folders with the argument name and attempted path', async () => {
     configureFakeJdMcpRoot();
 
@@ -186,6 +233,27 @@ describe('JdMcpBridge', () => {
       })
     ).rejects.toThrow(
       'analyze_access_logs requires log_folder to reference an existing folder. Attempted log_folder: undefined'
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing HAR file paths before invoking specialized tools', async () => {
+    configureFakeJdMcpRoot();
+
+    const bridge = new JdMcpBridge();
+    const invoke = vi.fn();
+    (bridge as unknown as { invoke: typeof invoke }).invoke = invoke;
+
+    await expect(
+      bridge.executeTool({
+        toolName: 'analyze_har_file',
+        input: {
+          har_file_path: 'undefined'
+        },
+        sessionId: 'session-with-missing-har'
+      })
+    ).rejects.toThrow(
+      'analyze_har_file requires har_file_path to reference an existing .har file. Attempted har_file_path: undefined'
     );
     expect(invoke).not.toHaveBeenCalled();
   });
