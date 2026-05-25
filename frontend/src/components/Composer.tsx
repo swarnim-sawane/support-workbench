@@ -562,7 +562,7 @@ function formatUploadCount(count: number, label: string): string | null {
 
 function buildUploadItemMessage(item: WorkbenchUploadItem): string {
   if (item.stage === 'processing') {
-    return 'Processing OCR and indexing';
+    return 'Processing and indexing';
   }
   if (item.stage === 'ready') {
     return 'Ready for analysis';

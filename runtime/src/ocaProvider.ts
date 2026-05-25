@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import type {
   EngineHealth,
+  EngineModelImageAttachment,
   EngineModelEvent,
   EngineModelMessage,
   EngineModelProvider,
   EngineToolDescriptor
 } from './types.js';
+
+const DEFAULT_MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
 
 type OcaProviderOptions = {
   baseUrl?: string;
@@ -158,10 +162,49 @@ function parseAssistantResponse(text: string): {
   };
 }
 
-function toOpenAiMessage(message: EngineModelMessage): {
+type OpenAiContentPart =
+  | {
+      type: 'text';
+      text: string;
+    }
+  | {
+      type: 'image_url';
+      image_url: {
+        url: string;
+      };
+    };
+
+type OpenAiMessage = {
   role: 'user' | 'assistant' | 'system';
-  content: string;
-} {
+  content: string | OpenAiContentPart[];
+};
+
+function maxInlineImageBytes(): number {
+  const configured = Number(process.env.OCA_MAX_INLINE_IMAGE_BYTES);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_INLINE_IMAGE_BYTES;
+}
+
+function imageAttachmentToContentPart(attachment: EngineModelImageAttachment): OpenAiContentPart | null {
+  try {
+    if (statSync(attachment.localPath).size > maxInlineImageBytes()) {
+      return null;
+    }
+
+    const encoded = readFileSync(attachment.localPath).toString('base64');
+    return {
+      type: 'image_url',
+      image_url: {
+        url: `data:${attachment.mediaType || 'image/png'};base64,${encoded}`
+      }
+    };
+  } catch {
+    return null;
+  }
+}
+
+function toOpenAiMessage(message: EngineModelMessage): OpenAiMessage {
   if (message.role === 'tool') {
     return {
       role: 'user',
@@ -169,6 +212,22 @@ function toOpenAiMessage(message: EngineModelMessage): {
 ${message.content}
 </claude_code_tool_result>`
     };
+  }
+
+  if (message.role === 'user' && message.imageAttachments?.length) {
+    const imageParts = message.imageAttachments
+      .map(imageAttachmentToContentPart)
+      .filter((part): part is OpenAiContentPart => part !== null);
+
+    if (imageParts.length) {
+      return {
+        role: message.role,
+        content: [
+          { type: 'text', text: message.content },
+          ...imageParts
+        ]
+      };
+    }
   }
 
   return {

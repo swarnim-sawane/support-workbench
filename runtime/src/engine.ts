@@ -28,6 +28,7 @@ import type {
   EngineIntegrationSnapshot,
   EngineMemoryEntry,
   EngineMessage,
+  EngineModelImageAttachment,
   EngineModelMessage,
   EngineProgressActivity,
   EngineProgressPhase,
@@ -518,6 +519,23 @@ function resolvePromptAttachments(
 
 function buildVisibleUserPrompt(prompt: string, attachments: EngineAttachment[]): string {
   return prompt;
+}
+
+function buildModelImageAttachments(attachments: EngineAttachment[]): EngineModelImageAttachment[] | undefined {
+  const images = attachments
+    .filter((attachment) =>
+      attachment.kind === 'image' &&
+      attachment.promptVisibility === 'available' &&
+      existsSync(attachment.localPath)
+    )
+    .map((attachment) => ({
+      originalName: attachment.originalName,
+      mediaType: attachment.mediaType,
+      localPath: attachment.localPath,
+      size: attachment.size
+    }));
+
+  return images.length ? images : undefined;
 }
 
 function truncateSessionText(content: string, maxLength: number): string {
@@ -1603,10 +1621,11 @@ function buildModelUserPrompt(
         return `- Text attachment ${attachment.originalName}: @"${attachment.localPath}"`;
       }
 
+      const imageInputLine = `  Image pixels are attached directly to this model turn. Use the image input itself for visual analysis; do not depend on OCR.`;
       const ocrLine = attachment.extractedText
-        ? `  OCR extracted text (may be incomplete): ${attachment.extractedText}`
-        : `  OCR extracted text unavailable. The image is local at @"${attachment.localPath}".`;
-      return `- Image attachment ${attachment.originalName}: @"${attachment.localPath}"\n${ocrLine}`;
+        ? `  Optional OCR text (may be incomplete): ${attachment.extractedText}`
+        : `  Optional OCR text unavailable.`;
+      return `- Image attachment ${attachment.originalName}: @"${attachment.localPath}"\n${imageInputLine}\n${ocrLine}`;
     }),
     '',
     'User prompt:',
@@ -4940,7 +4959,8 @@ export function createEngine(input: {
       state.session.status = 'running';
       state.modelHistory.push({
         role: 'user',
-        content: buildModelUserPrompt(prompt, turnAttachments, explicitReportRouting.reportSuggestion)
+        content: buildModelUserPrompt(prompt, turnAttachments, explicitReportRouting.reportSuggestion),
+        imageAttachments: buildModelImageAttachments(turnAttachments)
       });
       if (explicitReportRouting.reportSuggestion?.canRun) {
         state.reportSuggestion = explicitReportRouting.reportSuggestion;

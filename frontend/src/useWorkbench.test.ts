@@ -468,7 +468,7 @@ describe('useWorkbench', () => {
           name: 'trace.log',
           stage: 'processing',
           progress: 100,
-          message: 'Processing OCR and indexing'
+          message: 'Processing and indexing'
         })
       ])
     );

@@ -23,14 +23,9 @@ export function buildAttachmentStatus(attachment: WorkbenchAttachment): string {
 
   if (attachment.kind === 'image') {
     if (attachment.ocrStatus === 'pending') {
-      return 'OCR pending';
+      return 'Preparing image input';
     }
-    if (attachment.ocrStatus === 'completed') {
-      return 'OCR ready';
-    }
-    if (attachment.ocrStatus === 'failed') {
-      return attachment.ocrError ? `OCR failed: ${attachment.ocrError}` : 'OCR failed';
-    }
+    return 'Image ready for AI analysis';
   }
 
   return 'Ready for analysis';

@@ -1520,7 +1520,7 @@ describe('App', () => {
         size: 1024,
         stage: 'processing',
         progress: 100,
-        message: 'Processing OCR and indexing'
+        message: 'Processing and indexing'
       },
       {
         id: 'upload-broken',
@@ -1594,15 +1594,15 @@ describe('App', () => {
     expect(
       within(uploadStatus).getByRole('progressbar', { name: /trace\.log upload progress/i })
     ).toHaveAttribute('value', '42');
-    expect(within(uploadStatus).getByText(/processing OCR and indexing/i)).toBeInTheDocument();
+    expect(within(uploadStatus).getByText(/processing and indexing/i)).toBeInTheDocument();
     expect(within(uploadStatus).queryByText(/unsupported attachment type: broken\.zip/i)).not.toBeInTheDocument();
     const failedToast = screen.getByRole('alert');
     expect(within(failedToast).getByText('broken.zip')).toBeInTheDocument();
     expect(within(failedToast).getByText(/unsupported attachment type: broken\.zip/i)).toBeInTheDocument();
     expect(screen.getByText(/ready for analysis/i)).toBeInTheDocument();
-    expect(screen.getByText(/OCR ready/i)).toBeInTheDocument();
-    expect(screen.getByText(/OCR failed/i)).toBeInTheDocument();
-    expect(screen.getByText(/Windows OCR engine unavailable/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/image ready for ai analysis/i)).toHaveLength(2);
+    expect(screen.queryByText(/OCR failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Windows OCR engine unavailable/i)).not.toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(6000);

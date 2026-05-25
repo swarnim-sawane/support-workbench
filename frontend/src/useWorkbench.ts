@@ -541,7 +541,7 @@ function updateUploadProgress(
 ): WorkbenchUploadItem[] {
   const stage = progress.phase === 'processing' ? 'processing' : 'uploading';
   const message = stage === 'processing'
-    ? 'Processing OCR and indexing'
+    ? 'Processing and indexing'
     : `Uploading ${progress.percent}%`;
 
   return items.map((item) => {

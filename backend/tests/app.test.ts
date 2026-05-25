@@ -417,6 +417,14 @@ describe('createWorkbenchApp', () => {
     const userTurn = capturedTurns[0]?.at(-1);
     expect(userTurn?.content).toContain('runtime.env');
     expect(userTurn?.content).toContain('HTTP 500 on localhost:4317');
+    expect(userTurn).toMatchObject({
+      imageAttachments: [
+        expect.objectContaining({
+          originalName: 'error.png',
+          mediaType: 'image/png'
+        })
+      ]
+    });
   });
 
   it('keeps image uploads when OCR processing throws and records the OCR error', async () => {

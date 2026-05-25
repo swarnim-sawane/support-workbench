@@ -786,8 +786,18 @@ describe('createEngine', () => {
     });
     expect(userTurn?.content).toContain(`@"${textPath}"`);
     expect(userTurn?.content).toContain(`@"${imagePath}"`);
-    expect(userTurn?.content).toContain('OCR extracted text');
+    expect(userTurn?.content).toContain('Image pixels are attached directly');
+    expect(userTurn?.content).toContain('Optional OCR text');
     expect(userTurn?.content).toContain('Fatal: port 4317 already in use');
+    expect(userTurn).toMatchObject({
+      imageAttachments: [
+        expect.objectContaining({
+          originalName: 'error.png',
+          mediaType: 'image/png',
+          localPath: imagePath
+        })
+      ]
+    });
 
     const visibleUserMessage = engine.getSnapshot(session.id).messages.find((message) => message.role === 'user');
     expect(visibleUserMessage).toMatchObject({

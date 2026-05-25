@@ -243,10 +243,18 @@ export type EngineMessage = {
   attachmentIds?: string[];
 };
 
+export type EngineModelImageAttachment = {
+  originalName: string;
+  mediaType: string;
+  localPath: string;
+  size: number;
+};
+
 export type EngineModelMessage =
   | {
       role: 'user' | 'assistant';
       content: string;
+      imageAttachments?: EngineModelImageAttachment[];
     }
   | {
       role: 'tool';
