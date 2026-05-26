@@ -12,7 +12,7 @@ describe('HelpDrawer', () => {
     cleanup();
   });
 
-  it('renders specialized tools status, available tools, and unavailable reasons', () => {
+  it('renders focused analyzer status, available analyzers, and unavailable reasons', () => {
     render(
       <HelpDrawer
         open
@@ -20,7 +20,7 @@ describe('HelpDrawer', () => {
         jdMcp={{
           available: true,
           connected: false,
-          note: 'Specialized tools are recognized, but some prerequisites are still missing.',
+          note: 'Focused analyzers are recognized, but some prerequisites are still missing.',
           tools: ['analyze_har_file'],
           categories: ['diagnostics', 'reports'],
           toolDescriptors: [
@@ -32,7 +32,7 @@ describe('HelpDrawer', () => {
       />
     );
 
-    const section = screen.getByRole('region', { name: /specialized tools/i });
+    const section = screen.getByRole('region', { name: /focused analyzers/i });
     expect(within(section).getByText(/partially configured/i)).toBeInTheDocument();
     expect(within(section).getByText('analyze_har_file')).toBeInTheDocument();
     expect(within(section).getByText('translate_forms_trace')).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe('HelpDrawer', () => {
         jdMcp={{
           available: false,
           connected: false,
-          note: 'Specialized tools are not configured.',
+          note: 'Focused analyzers are not configured.',
           tools: [],
           categories: [],
           toolDescriptors: []

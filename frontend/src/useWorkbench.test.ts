@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from './api';
-import type { WorkbenchSessionSnapshot, WorkbenchSessionSummary } from './types';
+import type { WorkbenchAttachment, WorkbenchSessionSnapshot, WorkbenchSessionSummary } from './types';
 import { resetWorkbenchBootstrapForTests, useWorkbench } from './useWorkbench';
 
 vi.mock('./api', () => ({
@@ -19,6 +19,7 @@ vi.mock('./api', () => ({
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
+  onopen: (() => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   close = vi.fn();
@@ -61,6 +62,35 @@ describe('useWorkbench', () => {
     expect(api.createSession).toHaveBeenCalledWith({ sessionId: 'session-bridged' });
     expect(result.current.snapshot.sessionId).toBe('session-bridged');
     expect(MockEventSource.instances[0]?.url).toBe('/api/session/session-bridged/stream');
+  });
+
+  it('refreshes a bridged session after the stream connects so attachments uploaded during bootstrap appear', async () => {
+    window.history.replaceState({}, '', '/?sessionId=session-bridged');
+    const uploadedAttachment = buildAttachment('attachment-bridged', 'bridged.log');
+    vi.mocked(api.createSession).mockResolvedValue({
+      session: {
+        id: 'session-bridged',
+        cwd: 'C:/repo',
+        status: 'idle'
+      },
+      snapshot: buildSnapshot('session-bridged')
+    });
+    vi.mocked(api.fetchSnapshot).mockResolvedValue({
+      ...buildSnapshot('session-bridged'),
+      attachments: [uploadedAttachment]
+    });
+
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.activeSessionId).toBe('session-bridged'));
+
+    expect(result.current.snapshot.attachments).toEqual([]);
+
+    await act(async () => {
+      MockEventSource.instances[0]?.onopen?.();
+    });
+
+    await waitFor(() => expect(api.fetchSnapshot).toHaveBeenCalledWith('session-bridged'));
+    expect(result.current.snapshot.attachments).toEqual([uploadedAttachment]);
   });
 
   it('deletes the active chat and opens a fresh session', async () => {
@@ -579,6 +609,21 @@ function buildSnapshot(sessionId: string): WorkbenchSessionSnapshot {
         toolDescriptors: []
       }
     }
+  };
+}
+
+function buildAttachment(id: string, originalName: string): WorkbenchAttachment {
+  return {
+    id,
+    originalName,
+    storedName: originalName,
+    mediaType: 'text/plain',
+    kind: 'text',
+    localPath: `C:/repo/.claude-oca/uploads/${id}/${originalName}`,
+    size: 1024,
+    promptVisibility: 'available',
+    ocrStatus: 'unavailable',
+    uploadedAt: '2026-05-26T10:00:00.000Z'
   };
 }
 

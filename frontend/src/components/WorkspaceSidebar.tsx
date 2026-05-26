@@ -258,7 +258,7 @@ function ReportsTab({
   onPromptSubmit: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
 }) {
   if (!reports.length && !reportSuggestion) {
-    return <EmptyPane title="No reports yet" hint="Generated specialized HTML reports will appear here." />;
+    return <EmptyPane title="No reports yet" hint="Generated report artifacts will appear here." />;
   }
 
   return (
@@ -297,7 +297,7 @@ function ReportsTab({
                 className="secondary-action"
                 onClick={() => void onPromptSubmit('/report', reportSuggestion.attachmentIds)}
               >
-                Run specialized report anyway
+                Run focused analyzer
               </button>
             ) : null}
           </div>

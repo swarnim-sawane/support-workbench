@@ -126,7 +126,7 @@ export function WorkspaceRail({
       <RailSection icon={<PlugZap size={15} />} title="Integrations">
         <p className="muted-panel">{buildIntegrationStatus(snapshot)}</p>
         <p className="muted-panel">
-          {formatSpecializedToolText(snapshot.integrations.jdMcp.note) || 'No specialized tools note available.'}
+          {formatSpecializedToolText(snapshot.integrations.jdMcp.note) || 'No focused analyzer note available.'}
         </p>
         {snapshot.integrations.jdMcp.toolDescriptors.length ? (
           <div className="tool-cloud">
@@ -137,7 +137,7 @@ export function WorkspaceRail({
             ))}
           </div>
         ) : (
-          <p className="muted-panel">No specialized tools loaded</p>
+          <p className="muted-panel">No focused analyzers loaded</p>
         )}
       </RailSection>
 

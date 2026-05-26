@@ -4,6 +4,8 @@ export type WorkbenchMessage = {
   content: string;
   kind?: 'default' | 'command' | 'command-error' | 'tool' | 'attachment';
   attachmentIds?: string[];
+  jdMcpToolName?: string;
+  jdMcpToolLabel?: string;
 };
 
 export type WorkbenchAgentType = 'general' | 'research' | 'review' | 'diagnostics';

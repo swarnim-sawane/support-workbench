@@ -616,7 +616,7 @@ describe('createWorkbenchApp', () => {
 
   it('serves specialized HTML report artifacts and exposes specialized tool health state', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'claude-oca-jdmcp-backend-'));
-    const reportDir = join(cwd, 'reports');
+    const reportDir = join(cwd, '.specialized-tools', 'analyze_adf_logs-test');
     const reportPath = join(reportDir, 'adflr-report.html');
     mkdirSync(reportDir, { recursive: true });
     writeFileSync(reportPath, '<html><body>ADF report</body></html>');

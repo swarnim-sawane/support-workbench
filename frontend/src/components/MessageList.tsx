@@ -1,4 +1,4 @@
-import { Bot, FileText, Image, Terminal, User } from 'lucide-react';
+import { Bot, FileText, Image, SlidersHorizontal, Terminal, User } from 'lucide-react';
 import type { WorkbenchAttachment, WorkbenchMessage, WorkbenchSessionSnapshot } from '../types';
 import { MarkdownContent } from './MarkdownContent';
 import { RuntimeEventStack } from './RuntimeEventStack';
@@ -284,11 +284,13 @@ function MessageBubble({
 }) {
   if (message.role === 'user') {
     const attached = getMessageAttachments(message, attachments);
+    const focusedTool = getFocusedTool(message);
 
     return (
       <article className="message-row is-user">
         <div className="user-message-stack">
           {attached.length ? <UserAttachmentCards attachments={attached} /> : null}
+          {focusedTool ? <UserFocusedToolCard tool={focusedTool} /> : null}
           <div className="message-bubble user-bubble">
             <div className="message-copy">{message.content}</div>
           </div>
@@ -332,6 +334,31 @@ function getMessageAttachments(
   return (message.attachmentIds ?? [])
     .map((attachmentId) => attachments.find((attachment) => attachment.id === attachmentId))
     .filter((attachment): attachment is WorkbenchAttachment => Boolean(attachment));
+}
+
+function getFocusedTool(message: WorkbenchMessage): { name: string; label: string } | null {
+  if (!message.jdMcpToolName) {
+    return null;
+  }
+
+  return {
+    name: message.jdMcpToolName,
+    label: message.jdMcpToolLabel || message.jdMcpToolName
+  };
+}
+
+function UserFocusedToolCard({ tool }: { tool: { name: string; label: string } }) {
+  return (
+    <article className="user-focus-tool-card" aria-label={`Focused analyzer ${tool.label}`}>
+      <span className="user-focus-tool-icon" aria-hidden="true">
+        <SlidersHorizontal size={15} />
+      </span>
+      <span className="user-focus-tool-copy">
+        <small>Focused analyzer</small>
+        <strong>{tool.label}</strong>
+      </span>
+    </article>
+  );
 }
 
 function UserAttachmentCards({ attachments }: { attachments: WorkbenchAttachment[] }) {

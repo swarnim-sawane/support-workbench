@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { JD_MCP_TOOL_META, jdMcpToolRequiresJava } from './jdMcpToolDefinitions.js';
+import { applyToolSchemaDefaults } from './toolSchema.js';
 
 type WorkerRequest = {
   action: 'status' | 'execute';
@@ -13,6 +14,7 @@ type WorkerRequest = {
 type RegisteredTool = {
   name: string;
   description: string;
+  schema: unknown;
   handler: (input: Record<string, unknown>) => Promise<{
     content?: Array<{ type?: string; text?: string }>;
   }>;
@@ -24,12 +26,13 @@ class FakeMcpServer {
   tool(
     name: string,
     description: string,
-    _schema: unknown,
+    schema: unknown,
     handler: RegisteredTool['handler']
   ): void {
     this.tools.set(name, {
       name,
       description,
+      schema,
       handler
     });
   }
@@ -135,7 +138,7 @@ async function main(): Promise<void> {
     throw new Error(`Unknown specialized tool: ${request.toolName}`);
   }
 
-  const response = await tool.handler(request.input ?? {});
+  const response = await tool.handler(applyToolSchemaDefaults(tool.schema, request.input ?? {}));
   const text = response.content?.find((entry) => entry.type === 'text')?.text ?? '';
 
   process.stdout.write(

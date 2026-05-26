@@ -75,7 +75,7 @@ export async function submitPrompt(
   sessionId: string,
   prompt: string,
   attachmentIds: string[] = [],
-  options: { jdMcpToolName?: string } = {}
+  options: { jdMcpToolName?: string; jdMcpToolLabel?: string } = {}
 ): Promise<SnapshotResponse> {
   const response = await fetch(`/api/session/${sessionId}/prompt`, {
     method: 'POST',

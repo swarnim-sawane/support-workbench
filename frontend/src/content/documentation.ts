@@ -130,24 +130,24 @@ The goal is not to slow down the workflow. The goal is to make local execution i
   },
   {
     id: 'oca-and-specialized-tools',
-    title: 'OCA and specialized tools',
+    title: 'OCA and focused analyzers',
     summary: 'What the model and diagnostic bridge do at a user-facing level.',
     icon: 'integration',
     content: `
 The workbench uses an OCA-compatible model provider for chat and reasoning.
 
-When specialized tools are available, product-specific report tools can be selected on demand from the compact **Specialized tools** picker in the composer. When they are unavailable, the core chat, uploads, and local analysis flow still remain useful.
+When focused analyzers are available, the composer only shows **Focus** after the files added to chat match an enabled analyzer. If nothing matches, there is no extra control to think about: ask normally and the assistant uses direct file analysis.
 
 In normal use:
 
 - the model explains, summarizes, and chooses next diagnostic steps
 - local tools inspect files, session state, and workspace context
-- specialized report tools provide deeper product-specific HTML artifacts when configured
+- focused analyzers provide deeper product-specific artifacts when configured
 - the health pill and runtime trace help show what path was used
 
-The Help drawer lists the specialized tool catalog reported by the runtime, including disabled tools and prerequisite reasons such as missing tool root, missing Java/JDTOOLS configuration, missing jdtools.jar, or missing FORMS_HOME.
+The Help drawer lists the analyzer bridge catalog reported by the runtime, including prerequisite reasons such as missing analyzer root, missing Java/JDTOOLS configuration, missing jdtools.jar, or missing FORMS_HOME.
 
-Use **Specialized tools** when you specifically want a generated report from an enabled analyzer, such as:
+Use **Focus** when you specifically want to steer the answer through an enabled analyzer, such as:
 
 - access logs
 - ADF/ODL logs
@@ -159,9 +159,9 @@ Use **Specialized tools** when you specifically want a generated report from an 
 - JDeveloper workspaces
 - ADR incident folders
 
-HAR analysis and HAR-to-log correlation remain available through the normal chat and support commands where configured, but they are not shown as specialized report actions unless the runtime advertises them as report-producing tools.
+HAR analysis and HAR-to-log correlation remain available through the normal chat and support commands where configured, but they are not shown as Focus options unless the runtime advertises a matching analyzer for the selected evidence.
 
-If a report was not generated, the session should explain whether the analyzer was unavailable, skipped, or not relevant for that source.
+If an artifact was not generated, the session should explain whether the analyzer was unavailable, skipped, or not relevant for that source.
 `
   },
   {
@@ -174,7 +174,7 @@ Use this flow when a support case starts with incomplete or noisy evidence:
 
 1. Start a new chat for the issue or select the existing session for the same case
 2. Upload the smallest useful evidence bundle
-3. Add the relevant files to chat and either ask a focused question or select the most specific available specialized report tool
+3. Add the relevant files to chat, ask a focused question, and use Focus only if it appears for that evidence
 4. Review approvals and generated runtime events before continuing
 5. Open any report artifact and confirm it matches the uploaded source
 6. Ask a focused follow-up question, such as "what is the strongest evidence for the root cause?"

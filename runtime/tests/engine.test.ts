@@ -3274,7 +3274,15 @@ describe('createEngine', () => {
 
     await engine.submitPrompt(session.id, 'Analyze this ADF diagnostic log', {
       attachmentIds: ['att-log'],
-      jdMcpToolName: 'analyze_adf_logs'
+      jdMcpToolName: 'analyze_adf_logs',
+      jdMcpToolLabel: 'ADF diagnostic logs'
+    });
+
+    const userMessage = engine.getSnapshot(session.id).messages.find((message) => message.role === 'user');
+    expect(userMessage).toMatchObject({
+      content: 'Analyze this ADF diagnostic log',
+      jdMcpToolName: 'analyze_adf_logs',
+      jdMcpToolLabel: 'ADF diagnostic logs'
     });
 
     const approval = engine.getPendingApprovals(session.id)[0];

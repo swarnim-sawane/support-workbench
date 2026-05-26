@@ -241,6 +241,8 @@ export type EngineMessage = {
   createdAt: string;
   kind?: 'default' | 'command' | 'command-error' | 'tool' | 'attachment';
   attachmentIds?: string[];
+  jdMcpToolName?: string;
+  jdMcpToolLabel?: string;
 };
 
 export type EngineModelImageAttachment = {
@@ -619,6 +621,7 @@ export type WorkbenchEngine = {
       attachmentIds?: string[];
       ownerId?: string | null;
       jdMcpToolName?: string;
+      jdMcpToolLabel?: string;
     }
   ): Promise<void>;
   resolveApproval(

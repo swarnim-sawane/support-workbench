@@ -241,7 +241,7 @@ export function createWorkbenchApp(input: {
       }
 
       res.type('text/html');
-      res.sendFile(artifact.filePath);
+      res.sendFile(artifact.filePath, { dotfiles: 'allow' });
     } catch (error) {
       next(error);
     }
@@ -258,12 +258,21 @@ export function createWorkbenchApp(input: {
         typeof req.body?.jdMcpToolName === 'string' && req.body.jdMcpToolName.trim()
           ? req.body.jdMcpToolName.trim()
           : undefined;
+      const jdMcpToolLabel =
+        typeof req.body?.jdMcpToolLabel === 'string' && req.body.jdMcpToolLabel.trim()
+          ? req.body.jdMcpToolLabel.trim()
+          : undefined;
       if (!prompt.trim()) {
         res.status(400).json({ error: 'prompt is required' });
         return;
       }
 
-      await input.engine.submitPrompt(req.params.sessionId, prompt, { attachmentIds, ownerId, jdMcpToolName });
+      await input.engine.submitPrompt(req.params.sessionId, prompt, {
+        attachmentIds,
+        ownerId,
+        jdMcpToolName,
+        jdMcpToolLabel
+      });
       res.status(202).json({
         accepted: true,
         snapshot: input.engine.getSnapshot(req.params.sessionId, ownerId)

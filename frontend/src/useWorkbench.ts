@@ -114,19 +114,32 @@ export function useWorkbench() {
   function connectSession(sessionId: string): EventSource {
     eventSourceRef.current?.close();
     const eventSource = new EventSource(`/api/session/${sessionId}/stream`);
+    const refreshConnectedSession = async () => {
+      try {
+        const refreshed = await fetchSnapshot(sessionId);
+        if (eventSourceRef.current !== eventSource) {
+          return;
+        }
+        startTransition(() => {
+          setSnapshot(refreshed);
+        });
+      } catch (refreshError) {
+        if (eventSourceRef.current === eventSource) {
+          setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+        }
+      }
+    };
+    eventSource.onopen = () => {
+      void refreshConnectedSession();
+    };
     eventSource.onmessage = (message) => {
       const event = JSON.parse(message.data);
       startTransition(() => {
         setSnapshot((current) => reduceEngineEvent(current, event));
       });
     };
-    eventSource.onerror = async () => {
-      try {
-        const refreshed = await fetchSnapshot(sessionId);
-        setSnapshot(refreshed);
-      } catch (refreshError) {
-        setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
-      }
+    eventSource.onerror = () => {
+      void refreshConnectedSession();
     };
     eventSourceRef.current = eventSource;
     return eventSource;
@@ -316,7 +329,7 @@ export function useWorkbench() {
     async onPromptSubmit(
       prompt: string,
       attachmentIds: string[] = queuedAttachmentIds,
-      options: { jdMcpToolName?: string } = {}
+      options: { jdMcpToolName?: string; jdMcpToolLabel?: string } = {}
     ) {
       const trimmed = prompt.trim();
       if (!trimmed || !snapshot.sessionId) {

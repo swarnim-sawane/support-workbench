@@ -588,6 +588,55 @@ p {
   box-shadow: var(--shadow-sm, none);
 }
 
+.user-focus-tool-card {
+  display: inline-flex;
+  max-width: min(360px, 100%);
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 7px 9px;
+  box-shadow: var(--shadow-sm, none);
+}
+
+.user-focus-tool-icon {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--panel-raised);
+  color: var(--text-soft);
+}
+
+.user-focus-tool-copy {
+  min-width: 0;
+  text-align: left;
+}
+
+.user-focus-tool-copy small,
+.user-focus-tool-copy strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-focus-tool-copy small {
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.user-focus-tool-copy strong {
+  font-size: 0.82rem;
+}
+
 .user-attachment-icon {
   display: inline-grid;
   width: 38px;
@@ -1303,6 +1352,91 @@ p {
   opacity: 0.48;
 }
 
+.composer-quick-actions {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 8;
+  display: flex;
+  width: auto;
+  align-items: center;
+  justify-content: flex-start;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.composer-quick-action {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(10, 10, 10, 0.86);
+  border-radius: 999px;
+  background: #0a0a0a;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 820;
+  letter-spacing: 0;
+  padding: 0 16px;
+  pointer-events: auto;
+  --quick-action-shadow: rgba(10, 10, 10, 0.2);
+  --quick-action-shadow-strong: rgba(10, 10, 10, 0.26);
+  --quick-action-ring: rgba(10, 10, 10, 0.06);
+  --quick-action-ring-strong: rgba(10, 10, 10, 0.08);
+  box-shadow:
+    0 14px 32px var(--quick-action-shadow),
+    0 0 0 5px var(--quick-action-ring);
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+  animation: composer-quick-action-pulse 2.4s ease-in-out infinite;
+}
+
+.composer-quick-action:hover:not(:disabled),
+.composer-quick-action:focus-visible:not(:disabled) {
+  border-color: #0a0a0a;
+  background: #171717;
+  color: #ffffff;
+  outline: none;
+  transform: translateY(-2px);
+  box-shadow:
+    0 18px 40px var(--quick-action-shadow-strong),
+    0 0 0 6px var(--quick-action-ring-strong);
+}
+
+.composer-quick-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  animation: none;
+}
+
+@keyframes composer-quick-action-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 14px 32px var(--quick-action-shadow),
+      0 0 0 5px var(--quick-action-ring);
+  }
+
+  50% {
+    box-shadow:
+      0 18px 42px var(--quick-action-shadow-strong),
+      0 0 0 8px var(--quick-action-ring-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-quick-action {
+    animation: none;
+  }
+}
+
 .composer-attachment-tray.is-horizontal .attachment-chip {
   flex: 0 0 auto;
   min-height: 24px;
@@ -1356,8 +1490,7 @@ p {
   opacity: 0.55;
 }
 
-.specialized-tool-trigger[aria-expanded='true'] svg:last-child,
-.specialized-tool-unavailable[open] summary svg {
+.specialized-tool-trigger[aria-expanded='true'] svg:last-child {
   transform: rotate(180deg);
 }
 
@@ -1435,8 +1568,7 @@ p {
 
 .specialized-tool-popover-head span,
 .specialized-tool-empty,
-.specialized-tool-row small,
-.specialized-tool-unavailable-row span {
+.specialized-tool-row small {
   color: var(--text-soft);
   font-size: 0.74rem;
 }
@@ -1521,50 +1653,6 @@ p {
 
 .specialized-tool-empty {
   margin: 0;
-}
-
-.specialized-tool-unavailable {
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
-}
-
-.specialized-tool-unavailable summary {
-  display: inline-flex;
-  cursor: pointer;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-soft);
-  font-size: 0.76rem;
-  font-weight: 750;
-  list-style: none;
-}
-
-.specialized-tool-unavailable summary::-webkit-details-marker {
-  display: none;
-}
-
-.specialized-tool-unavailable summary small {
-  border-radius: 999px;
-  background: rgba(123, 143, 160, 0.14);
-  padding: 1px 6px;
-}
-
-.specialized-tool-unavailable-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.specialized-tool-unavailable-row {
-  display: grid;
-  gap: 2px;
-  border-radius: 10px;
-  background: var(--surface-2);
-  padding: 8px 10px;
-}
-
-.specialized-tool-unavailable-row strong {
-  font-size: 0.78rem;
 }
 
 @media (max-width: 640px) {
@@ -2408,6 +2496,17 @@ p {
 
 [data-theme='dark'] .user-bubble {
   background: rgba(28, 126, 118, 0.22);
+  color: var(--text);
+}
+
+[data-theme='dark'] .user-focus-tool-card {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+[data-theme='dark'] .user-focus-tool-icon {
+  background: var(--surface-2);
   color: var(--text);
 }
 
@@ -6369,6 +6468,26 @@ body:has(.app-shell[data-embedded='true']) {
   color: #0a0a0a;
 }
 
+.app-shell[data-embedded='true'] .composer-quick-actions {
+  bottom: calc(100% + 12px);
+}
+
+.app-shell[data-embedded='true'] .composer-quick-action {
+  border-color: #0a0a0a;
+  background: #0a0a0a;
+  color: #ffffff;
+  box-shadow:
+    0 14px 34px var(--quick-action-shadow),
+    0 0 0 5px var(--quick-action-ring);
+}
+
+.app-shell[data-embedded='true'] .composer-quick-action:hover:not(:disabled),
+.app-shell[data-embedded='true'] .composer-quick-action:focus-visible:not(:disabled) {
+  border-color: #0a0a0a;
+  background: #171717;
+  color: #ffffff;
+}
+
 .app-shell[data-embedded='true'] .composer-attachment-divider {
   background: #dedede;
 }
@@ -6572,6 +6691,29 @@ body:has(.app-shell[data-embedded='true'][data-theme='dark']) {
   box-shadow: var(--chat-ring);
 }
 
+.app-shell[data-embedded='true'][data-theme='dark'] .composer-quick-action {
+  --quick-action-shadow: rgba(255, 255, 255, 0.08);
+  --quick-action-shadow-strong: rgba(255, 255, 255, 0.14);
+  --quick-action-ring: rgba(255, 255, 255, 0.1);
+  --quick-action-ring-strong: rgba(255, 255, 255, 0.16);
+  border-color: #f5f5f5;
+  background: #f5f5f5;
+  color: #050505;
+  box-shadow:
+    0 14px 34px var(--quick-action-shadow),
+    0 0 0 5px var(--quick-action-ring);
+}
+
+.app-shell[data-embedded='true'][data-theme='dark'] .composer-quick-action:hover:not(:disabled),
+.app-shell[data-embedded='true'][data-theme='dark'] .composer-quick-action:focus-visible:not(:disabled) {
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #050505;
+  box-shadow:
+    0 18px 42px var(--quick-action-shadow-strong),
+    0 0 0 8px var(--quick-action-ring-strong);
+}
+
 .app-shell[data-embedded='true'][data-theme='dark'] .icon-button:hover,
 .app-shell[data-embedded='true'][data-theme='dark'] .specialized-tool-tag button:hover,
 .app-shell[data-embedded='true'][data-theme='dark'] .specialized-tool-tag button:focus-visible {
@@ -6730,7 +6872,18 @@ body:has(.app-shell[data-embedded='true'][data-theme='dark']) {
   box-shadow: 0 8px 24px rgba(10, 10, 10, 0.05);
 }
 
+.app-shell[data-embedded='true'] .user-focus-tool-card {
+  border-color: #e5e5e5;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(10, 10, 10, 0.05);
+}
+
 .app-shell[data-embedded='true'] .user-attachment-icon {
+  background: #f5f5f5;
+  color: #171717;
+}
+
+.app-shell[data-embedded='true'] .user-focus-tool-icon {
   background: #f5f5f5;
   color: #171717;
 }
@@ -7185,7 +7338,19 @@ body:has(.app-shell[data-embedded='true'][data-theme='dark']) {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
 }
 
+.app-shell[data-embedded='true'][data-theme='dark'] .user-focus-tool-card {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #101010;
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+}
+
 .app-shell[data-embedded='true'][data-theme='dark'] .user-attachment-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.app-shell[data-embedded='true'][data-theme='dark'] .user-focus-tool-icon {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }

@@ -7,8 +7,8 @@ import {
   Paperclip,
   Plus,
   SendHorizonal,
+  SlidersHorizontal,
   UploadCloud,
-  Wrench,
   X
 } from 'lucide-react';
 import {
@@ -52,6 +52,7 @@ type ComposerProps = {
   onRunJdMcpTool?: (input: {
     toolName: string;
     label: string;
+    prompt: string;
     attachmentIds: string[];
   }) => void | Promise<void>;
   onDragEnterFiles: (event: DragEvent) => void;
@@ -98,10 +99,7 @@ export function Composer({
       })
     : null;
   const specializedAvailableActions = jdMcpActions?.available ?? [];
-  const specializedUnavailableActions = jdMcpActions?.unavailable ?? [];
-  const hasSpecializedToolActions = Boolean(
-    jdMcpActions && (specializedAvailableActions.length || specializedUnavailableActions.length)
-  );
+  const hasSpecializedToolActions = specializedAvailableActions.length > 0;
   const canSubmit = Boolean(draft.trim() || selectedSpecializedAction);
   const specializedActionKey = specializedAvailableActions
     .map((action) => `${action.toolName}:${action.attachmentIds.join(',')}`)
@@ -122,6 +120,8 @@ export function Composer({
   );
   const hasAttachmentSelectionControls = eligibleAttachments.length > 0;
   const hasComposerToolbar = hasSpecializedToolActions;
+  const showQuickAnalyseAction = queuedAttachmentIds.length > 0 && !draft.trim() && !selectedSpecializedAction;
+  const quickAnalyseDisabled = isSubmitting || status === 'running';
   const selectedAttachmentSummary = `Files ${selectedEligibleIds.length}/${eligibleAttachments.length}`;
   const selectedAttachmentAriaSummary = `${selectedEligibleIds.length} of ${eligibleAttachments.length} workspace ${eligibleAttachments.length === 1 ? 'file' : 'files'} added to chat`;
 
@@ -163,7 +163,8 @@ export function Composer({
       const details = draft.trim();
       void onRunJdMcpTool({
         toolName: selectedSpecializedAction.toolName,
-        label: details ? `${selectedSpecializedAction.label}\n\n${details}` : selectedSpecializedAction.label,
+        label: selectedSpecializedAction.label,
+        prompt: details || 'Analyse the selected files.',
         attachmentIds: selectedSpecializedAction.attachmentIds
       });
       setDraft('');
@@ -216,6 +217,16 @@ export function Composer({
     }
   }
 
+  function runQuickAnalyse() {
+    if (!queuedAttachmentIds.length || quickAnalyseDisabled) {
+      return;
+    }
+
+    void onPromptSubmit(buildQuickAnalysePrompt(queuedAttachments), queuedAttachmentIds);
+    setDraft('');
+    setSpecializedPickerOpen(false);
+  }
+
   return (
     <form
       className={`composer-shell ${isDraggingFiles ? 'is-dragging-files' : ''}`}
@@ -225,6 +236,20 @@ export function Composer({
       onDragOver={onDragOverFiles}
       onDrop={onDropFiles}
     >
+      {showQuickAnalyseAction ? (
+        <div className="composer-quick-actions" aria-label="Suggested actions">
+          <button
+            type="button"
+            className="composer-quick-action"
+            aria-label="Analyse attached files"
+            onClick={runQuickAnalyse}
+            disabled={quickAnalyseDisabled}
+          >
+            <FileText size={14} aria-hidden="true" />
+            <span>Analyse</span>
+          </button>
+        </div>
+      ) : null}
       <div className="composer-box">
         {isDraggingFiles ? <div className="drop-target-label">Drop files to attach</div> : null}
         {hasActiveUploadItems || queuedAttachments.length || hasAttachmentSelectionControls ? (
@@ -338,7 +363,6 @@ export function Composer({
                 open={specializedPickerOpen}
                 selectedAction={selectedSpecializedAction}
                 groupedActions={groupedSpecializedActions}
-                unavailableActions={specializedUnavailableActions}
                 disabled={isSubmitting || status === 'running'}
                 onToggle={() => setSpecializedPickerOpen((open) => !open)}
                 onDismiss={() => setSpecializedPickerOpen(false)}
@@ -356,11 +380,19 @@ export function Composer({
   );
 }
 
+function buildQuickAnalysePrompt(attachments: WorkbenchAttachment[]): string {
+  const fileNames = attachments
+    .map((attachment) => attachment.originalName)
+    .filter(Boolean);
+  const fileSummary = fileNames.length ? ` Attached files: ${fileNames.join(', ')}.` : '';
+
+  return `Analyse the attached file${attachments.length === 1 ? '' : 's'}. Identify the root cause, key evidence, impact, and next recommended support actions. Cite filenames, lines, requests, errors, or snippets where available.${fileSummary}`;
+}
+
 function SpecializedToolPicker({
   open,
   selectedAction,
   groupedActions,
-  unavailableActions,
   disabled,
   onToggle,
   onDismiss,
@@ -370,7 +402,6 @@ function SpecializedToolPicker({
   open: boolean;
   selectedAction: JdMcpComposerAction | null;
   groupedActions: Array<[JdMcpWorkflowGroup, JdMcpComposerAction[]]>;
-  unavailableActions: JdMcpComposerAction[];
   disabled: boolean;
   onToggle: () => void;
   onDismiss: () => void;
@@ -378,6 +409,10 @@ function SpecializedToolPicker({
   onRemoveSelection: () => void;
 }) {
   const availableCount = groupedActions.reduce((count, [, actions]) => count + actions.length, 0);
+  const triggerLabel = 'Focus';
+  const triggerAriaLabel = selectedAction
+    ? `Focus analysis: ${selectedAction.label}`
+    : 'Focus analysis';
 
   function onPickerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
@@ -392,22 +427,23 @@ function SpecializedToolPicker({
         <button
           type="button"
           className="specialized-tool-trigger"
+          aria-label={triggerAriaLabel}
           aria-expanded={open}
           aria-controls="specialized-tool-popover"
           disabled={disabled}
           onClick={onToggle}
         >
-          <Wrench size={14} aria-hidden="true" />
-          <span>Specialized tools</span>
+          <SlidersHorizontal size={14} aria-hidden="true" />
+          <span>{triggerLabel}</span>
           <ChevronDown size={13} aria-hidden="true" />
         </button>
         {selectedAction ? (
           <span className="specialized-tool-tag" title={selectedAction.description}>
             <FileText size={13} aria-hidden="true" />
-            <span>Specialized: {selectedAction.label}</span>
+            <span>Focus: {selectedAction.label}</span>
             <button
               type="button"
-              aria-label={`Remove specialized tool ${selectedAction.label}`}
+              aria-label={`Clear focus analysis ${selectedAction.label}`}
               onClick={onRemoveSelection}
             >
               <X size={12} aria-hidden="true" />
@@ -421,18 +457,21 @@ function SpecializedToolPicker({
           id="specialized-tool-popover"
           className="specialized-tool-popover"
           role="dialog"
-          aria-label="Specialized tools"
+          aria-label="Focus analysis"
           onKeyDown={onPickerKeyDown}
         >
           <div className="specialized-tool-popover-head">
-            <strong>Run a report tool</strong>
-            <span>{availableCount ? `${availableCount} matching` : 'No matching tools'}</span>
+            <strong>Focus analysis</strong>
+            <span>{availableCount} matching</span>
           </div>
+          <p className="specialized-tool-empty">
+            Choose a focused analyzer when you want to steer the answer. Leave it alone for normal automatic diagnosis.
+          </p>
 
           {groupedActions.length ? (
             <div className="specialized-tool-groups">
               {groupedActions.map(([group, actions]) => (
-                <section key={group} className="specialized-tool-group" aria-label={`${group} reports`}>
+                <section key={group} className="specialized-tool-group" aria-label={`${group} analysis modes`}>
                   <h4>{group}</h4>
                   {actions.map((action) => (
                     <button
@@ -451,7 +490,7 @@ function SpecializedToolPicker({
                       </span>
                       <span className="specialized-tool-meta">
                         <small>{getJdMcpToolStatus(action)}</small>
-                        <em>HTML report</em>
+                        <em>Focus</em>
                       </span>
                     </button>
                   ))}
@@ -460,27 +499,9 @@ function SpecializedToolPicker({
             </div>
           ) : (
             <p className="specialized-tool-empty">
-              Add a matching log, trace, dump, workspace, or incident bundle to chat to enable report tools.
+              Ask normally and automatic diagnosis will inspect the selected files.
             </p>
           )}
-
-          {unavailableActions.length ? (
-            <details className="specialized-tool-unavailable">
-              <summary>
-                <ChevronDown size={13} aria-hidden="true" />
-                <span>Unavailable tools</span>
-                <small>{unavailableActions.length}</small>
-              </summary>
-              <div className="specialized-tool-unavailable-list">
-                {unavailableActions.map((action) => (
-                  <article key={action.toolName} className="specialized-tool-unavailable-row">
-                    <strong>{action.label}</strong>
-                    <span>{action.disabledReason ?? 'Unavailable in this session.'}</span>
-                  </article>
-                ))}
-              </div>
-            </details>
-          ) : null}
         </div>
       ) : null}
     </div>

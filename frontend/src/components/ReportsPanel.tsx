@@ -83,7 +83,7 @@ export function ReportsPanel({
                 className="secondary-action"
                 onClick={() => void onPromptSubmit('/report', reportSuggestion.attachmentIds)}
               >
-                Run specialized report anyway
+                Run focused analyzer
               </button>
             ) : null}
           </div>

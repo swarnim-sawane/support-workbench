@@ -103,7 +103,7 @@ export function RuntimeEventStack({
       {reportSuggestion ? (
         <TranscriptEventGroup
           title={buildReportSuggestionTitle(reportSuggestion)}
-          subtitle="Specialized report handoff"
+          subtitle="Focused analyzer handoff"
           icon={<Info size={15} />}
           tone={reportSuggestion.available ? 'tone-active' : 'tone-waiting'}
           open
@@ -117,7 +117,7 @@ export function RuntimeEventStack({
                 className="secondary-action inline"
                 onClick={() => void onPromptSubmit('/report', reportSuggestion.attachmentIds)}
               >
-                Run specialized report anyway
+                Run focused analyzer
               </button>
             ) : null}
           </div>

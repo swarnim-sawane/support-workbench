@@ -1644,7 +1644,7 @@ function buildModelUserPrompt(
     lines.push(
       '',
       'Runtime instruction:',
-      `The user explicitly requested specialized log analysis. Prefer calling ${explicitReportSuggestion.suggestedToolName} with exactly this input: ${JSON.stringify(explicitReportSuggestion.input)}. Do not claim a specialized report exists unless the tool result provides report artifacts.`
+      `The user explicitly requested specialized log analysis. Prefer calling ${explicitReportSuggestion.suggestedToolName} with exactly this input: ${JSON.stringify(explicitReportSuggestion.input)}. Do not claim a specialized report exists unless the tool result provides report artifacts. If a report artifact is generated, tell the user it is available inside the Workbench Reports/chat preview. Do not tell the user to open a local filesystem path or launch an external browser.`
     );
   } else if (explicitReportSuggestion && !explicitReportSuggestion.canRun) {
     lines.push(
@@ -1782,6 +1782,7 @@ function buildRuntimeCapabilityContext(
     `- Current session: status=${state.session.status}, branch=${state.branch ?? 'not tracked'}, history_summaries=${state.historySummaries.length}`,
     `- Session attachments available locally: ${attachmentSummary}`,
     `- Generated report artifacts in this session: ${state.reportArtifacts.length}`,
+    '- Generated reports are rendered inside the Workbench Reports tab and chat preview; do not ask the user to open local HTML paths or use an external browser for them.',
     `- Latest skipped external tool: ${latestSkippedTool ? `${latestSkippedTool.toolName} (${latestSkippedTool.reasonCode})` : 'none'}`,
     `- Latest report routing note: ${reportRoutingNote}`,
     `- Current tasks: ${taskSummary}`,
@@ -4889,7 +4890,9 @@ export function createEngine(input: {
         ...createMessage('user', visiblePrompt),
         attachmentIds: turnAttachments.length
           ? turnAttachments.map((attachment) => attachment.id)
-          : undefined
+          : undefined,
+        jdMcpToolName: options?.jdMcpToolName,
+        jdMcpToolLabel: options?.jdMcpToolLabel ?? options?.jdMcpToolName
       };
       const progressKey = userMessage.id;
       const startedAt = new Date().toISOString();

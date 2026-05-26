@@ -26,7 +26,7 @@ type AppProps = {
   onPromptSubmit: (
     prompt: string,
     attachmentIds: string[],
-    options?: { jdMcpToolName?: string }
+    options?: { jdMcpToolName?: string; jdMcpToolLabel?: string }
   ) => void | Promise<void>;
   onApprove: (requestId: string, decision: 'allow' | 'deny') => void | Promise<void>;
   onAttachFiles: (files: File[]) => void | Promise<void>;
@@ -50,16 +50,30 @@ type UploadToast = {
 };
 
 const UPLOAD_TOAST_TIMEOUT_MS = 5600;
+const SHELL_THEME_MESSAGE_TYPE = 'support-workbench:set-theme';
 
 function isEmbeddedWorkbench(): boolean {
   return new URLSearchParams(window.location.search).get('embedded') === '1';
 }
 
+function isWorkbenchTheme(value: unknown): value is WorkbenchTheme {
+  return value === 'light' || value === 'dark' || value === 'redwood';
+}
+
 function readThemeFromUrl(): WorkbenchTheme | null {
   const themeParam = new URLSearchParams(window.location.search).get('theme');
-  return themeParam === 'light' || themeParam === 'dark' || themeParam === 'redwood'
-    ? themeParam
-    : null;
+  return isWorkbenchTheme(themeParam) ? themeParam : null;
+}
+
+function readThemeFromShellMessage(event: MessageEvent): WorkbenchTheme | null {
+  if (!event.data || typeof event.data !== 'object') return null;
+
+  const data = event.data as { type?: unknown; theme?: unknown };
+  if (data.type !== SHELL_THEME_MESSAGE_TYPE || !isWorkbenchTheme(data.theme)) {
+    return null;
+  }
+
+  return data.theme;
 }
 
 export function App({
@@ -144,6 +158,19 @@ export function App({
         : snapshot.reports.artifacts[0]?.id ?? null;
     });
   }, [snapshot.reports.artifacts]);
+
+  useEffect(() => {
+    if (!isEmbedded) return undefined;
+
+    function onShellMessage(event: MessageEvent) {
+      const nextTheme = readThemeFromShellMessage(event);
+      if (!nextTheme) return;
+      setTheme((currentTheme) => (currentTheme === nextTheme ? currentTheme : nextTheme));
+    }
+
+    window.addEventListener('message', onShellMessage);
+    return () => window.removeEventListener('message', onShellMessage);
+  }, [isEmbedded]);
 
   useEffect(() => {
     for (const item of uploadItems) {
@@ -240,7 +267,7 @@ export function App({
   async function handlePromptSubmit(
     prompt: string,
     attachmentIds: string[],
-    options: { jdMcpToolName?: string } = {}
+    options: { jdMcpToolName?: string; jdMcpToolLabel?: string } = {}
   ) {
     if (isSubmittingPromptRef.current) {
       return;
@@ -489,8 +516,11 @@ export function App({
                   onUnqueueAttachment={onUnqueueAttachment}
                   availableAttachments={availableAttachments}
                   jdMcp={snapshot.integrations.jdMcp}
-                  onRunJdMcpTool={({ toolName, label, attachmentIds }) =>
-                    void handlePromptSubmit(label, attachmentIds, { jdMcpToolName: toolName })
+                  onRunJdMcpTool={({ toolName, label, prompt, attachmentIds }) =>
+                    void handlePromptSubmit(prompt, attachmentIds, {
+                      jdMcpToolName: toolName,
+                      jdMcpToolLabel: label
+                    })
                   }
                   onDragEnterFiles={onDragEnterFiles}
                   onDragLeaveFiles={onDragLeaveFiles}

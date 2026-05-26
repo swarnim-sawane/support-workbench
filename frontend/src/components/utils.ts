@@ -41,30 +41,46 @@ export function buildChatReportCardId(reportId: string): string {
 
 export function buildIntegrationStatus(snapshot: WorkbenchSessionSnapshot): string {
   if (snapshot.integrations.jdMcp.connected) {
-    return 'Specialized tools connected';
+    return 'Focused analyzers connected';
   }
   if (snapshot.integrations.jdMcp.available) {
-    return 'Specialized tools partially configured';
+    return 'Focused analyzers partially configured';
   }
-  return 'Specialized tools unavailable';
+  return 'Focused analyzers unavailable';
 }
 
 export function formatToolSource(source: string | undefined): string {
-  return source === 'jd-mcp' ? 'Specialized tools' : source ?? 'unknown';
+  return source === 'jd-mcp' ? 'Focused analyzers' : source ?? 'unknown';
 }
 
 export function formatSpecializedToolText(text: string | undefined): string {
   return (text ?? '')
-    .replace(/JD_MCP_ROOT/g, 'Specialized tools root')
-    .replace(/JD_MCP_JDTOOLS_JAVA/g, 'Specialized tools Java path')
-    .replace(/JD_MCP_JDTOOLS_DIR/g, 'Specialized tools directory')
-    .replace(/JD_MCP_FORMS_HOME/g, 'Specialized tools Forms home')
-    .replace(/\bJD MCP HTML report(s?)\b/gi, 'specialized HTML report$1')
-    .replace(/\bjd-mcp HTML report(s?)\b/gi, 'specialized HTML report$1')
-    .replace(/\bJD MCP report(s?)\b/gi, 'specialized report$1')
-    .replace(/\bjd-mcp report(s?)\b/gi, 'specialized report$1')
-    .replace(/\bJD MCP\b/gi, 'Specialized tools')
-    .replace(/\bjd-mcp\b/gi, 'Specialized tools');
+    .replace(/JD_MCP_ROOT/g, 'Focused analyzer root')
+    .replace(/JD_MCP_JDTOOLS_JAVA/g, 'Focused analyzer Java path')
+    .replace(/JD_MCP_JDTOOLS_DIR/g, 'Focused analyzer directory')
+    .replace(/JD_MCP_FORMS_HOME/g, 'Focused analyzer Forms home')
+    .replace(/\bJD MCP HTML report artifact(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bjd-mcp HTML report artifact(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bspecialized HTML report artifact(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bJD MCP HTML report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bjd-mcp HTML report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bspecialized HTML report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bJD MCP report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bjd-mcp report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bspecialized report(s?)\b/gi, 'focused analyzer artifact$1')
+    .replace(/\bSpecialized tools root\b/g, 'Focused analyzer root')
+    .replace(/\bspecialized tools root\b/g, 'focused analyzer root')
+    .replace(/\bSpecialized tools Java path\b/g, 'Focused analyzer Java path')
+    .replace(/\bspecialized tools Java path\b/g, 'focused analyzer Java path')
+    .replace(/\bSpecialized tools directory\b/g, 'Focused analyzer directory')
+    .replace(/\bspecialized tools directory\b/g, 'focused analyzer directory')
+    .replace(/\bSpecialized tools Forms home\b/g, 'Focused analyzer Forms home')
+    .replace(/\bspecialized tools Forms home\b/g, 'focused analyzer Forms home')
+    .replace(/\bSpecialized tools\b/g, 'Focused analyzers')
+    .replace(/\bspecialized tools\b/g, 'focused analyzers')
+    .replace(/\bspecialized tool\b/g, 'focused analyzer')
+    .replace(/\bJD MCP\b/gi, 'Focused analyzers')
+    .replace(/\bjd-mcp\b/gi, 'Focused analyzers');
 }
 
 export function buildToolDescriptorLabel(

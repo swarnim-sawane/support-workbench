@@ -294,7 +294,7 @@ describe('App', () => {
     expect(within(rail).queryByRole('button', { name: /tool activity/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /reports/i })).not.toBeInTheDocument();
     expect(within(rail).queryByRole('button', { name: /queued files/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/Generated 1 specialized HTML report artifact/i)).toBeInTheDocument();
+    expect(screen.getByText(/Generated 1 focused analyzer artifact/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /deny write/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /allow write/i }));
 
@@ -435,7 +435,7 @@ describe('App', () => {
     expect(screen.getByText(/why no report\?/i)).toBeInTheDocument();
     expect(screen.getByText(/better answer for a single attached log/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run focused analyzer/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
@@ -474,7 +474,7 @@ describe('App', () => {
     expect(screen.getByText(/why no report\?/i)).toBeInTheDocument();
     expect(screen.getByText(/better answer for a single attached log/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run focused analyzer/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-1']);
   });
@@ -574,7 +574,7 @@ describe('App', () => {
     expect(screen.getByText('Direct analysis fallback used')).toBeInTheDocument();
     expect(screen.queryByText(/why no report\?/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /run specialized report anyway/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run focused analyzer/i }));
 
     expect(onPromptSubmit).toHaveBeenCalledWith('/report', ['att-log']);
   });
@@ -1078,6 +1078,108 @@ describe('App', () => {
     expect(within(userTurn as HTMLElement).getByText(/File - 9\.7 KB/i)).toBeInTheDocument();
   });
 
+  it('renders focused analyzer selection as a compact card outside the user prompt', () => {
+    const noop = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      messages: [
+        {
+          id: 'user-with-focus-tool',
+          role: 'user',
+          content: 'analyse',
+          attachmentIds: ['att-1'],
+          jdMcpToolName: 'analyze_adf_logs',
+          jdMcpToolLabel: 'ADF diagnostic logs'
+        },
+        {
+          id: 'assistant-after-focus-tool',
+          role: 'assistant',
+          content: 'I will use the focused analyzer.'
+        }
+      ],
+      attachments: [
+        {
+          id: 'att-1',
+          originalName: 'DefaultServer-diagnostic.log',
+          storedName: 'DefaultServer-diagnostic.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/DefaultServer-diagnostic.log',
+          size: 865100,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ],
+      toolActivity: [],
+      reports: {
+        artifacts: []
+      }
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    const userTurn = screen.getByText('analyse').closest('.message-row');
+    expect(userTurn).not.toBeNull();
+    expect(within(userTurn as HTMLElement).getByText('ADF diagnostic logs')).toBeInTheDocument();
+    expect(within(userTurn as HTMLElement).getByText('Focused analyzer')).toBeInTheDocument();
+    expect(within(userTurn as HTMLElement).getByText('analyse')).toHaveClass('message-copy');
+  });
+
+  it('submits focused analyzer selection as metadata instead of prompt text', () => {
+    const noop = vi.fn();
+    const onPromptSubmit = vi.fn();
+    const snapshot = {
+      ...buildInteractiveSnapshot(),
+      attachments: [
+        {
+          id: 'att-log',
+          originalName: 'DefaultServer-diagnostic.log',
+          storedName: 'DefaultServer-diagnostic.log',
+          mediaType: 'text/plain',
+          kind: 'text',
+          localPath: 'C:/repo/.claude-oca/uploads/session-interactive/DefaultServer-diagnostic.log',
+          size: 865100,
+          promptVisibility: 'available',
+          ocrStatus: 'unavailable',
+          uploadedAt: '2026-04-24T00:00:00.000Z'
+        }
+      ]
+    } as WorkbenchSessionSnapshot;
+
+    renderWorkbench({
+      snapshot,
+      queuedAttachmentIds: ['att-log'],
+      onPromptSubmit,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /focus analysis/i }));
+    fireEvent.click(screen.getByRole('button', { name: /adf diagnostic logs/i }));
+    fireEvent.change(screen.getByPlaceholderText(/message support workbench/i), {
+      target: { value: 'analyse' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send prompt/i }));
+
+    expect(onPromptSubmit).toHaveBeenCalledWith('analyse', ['att-log'], {
+      jdMcpToolName: 'analyze_adf_logs',
+      jdMcpToolLabel: 'ADF diagnostic logs'
+    });
+  });
+
   it('shows unavailable analyzer fallback without offering /report', () => {
     const onApprove = vi.fn();
     const onPromptSubmit = vi.fn();
@@ -1158,8 +1260,8 @@ describe('App', () => {
     );
 
     expect(screen.getByText('Analyzer unavailable, direct analysis used')).toBeInTheDocument();
-    expect(screen.getByText(/Specialized tools root is not configured/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /run specialized report anyway/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Focused analyzer root is not configured/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run focused analyzer/i })).not.toBeInTheDocument();
   });
 
   it('shows shimmer thinking while a turn is running before assistant text arrives', () => {
@@ -1881,6 +1983,36 @@ describe('App', () => {
 
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-embedded', 'true');
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  it('updates the embedded theme from shell messages without a navigation reload', () => {
+    const noop = vi.fn();
+    window.history.pushState({}, '', '/?sessionId=session-interactive&embedded=1&theme=light');
+
+    renderWorkbench({
+      snapshot: buildInteractiveSnapshot(),
+      activeSessionId: 'session-interactive',
+      queuedAttachmentIds: [],
+      onPromptSubmit: noop,
+      onApprove: noop,
+      onAttachFiles: noop,
+      onRemoveAttachment: noop,
+      onQueueAttachment: noop,
+      onUnqueueAttachment: noop
+    });
+
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'light');
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'support-workbench:set-theme', theme: 'dark' }
+        })
+      );
+    });
+
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-theme', 'dark');
+    expect(window.location.search).toBe('?sessionId=session-interactive&embedded=1&theme=light');
   });
 
   it('keeps the embedded workspace file list clipped without horizontal scrolling', () => {

@@ -1,4 +1,4 @@
-import { Command, FileText, Keyboard, Sparkles, Upload, Wrench, X } from 'lucide-react';
+import { Command, FileText, Keyboard, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { friendlyJdMcpStatus } from '../jdMcpWorkflows';
 import type { WorkbenchCommandInfo, WorkbenchIntegrationSnapshot } from '../types';
 import { formatSpecializedToolText } from './utils';
@@ -49,8 +49,8 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
             <p className="eyebrow">Use <kbd>/</kbd> to run commands</p>
             <p>
               Slash commands guide the workflow with uploads and in-session
-              sources. Specialized tools are launched from the composer picker
-              when matching evidence is added to chat.
+              sources. When a matching analyzer is available, the composer
+              shows a compact Focus control. Otherwise, ask normally.
             </p>
           </section>
 
@@ -83,26 +83,26 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
           <section className="help-card">
             <FileText size={18} aria-hidden="true" />
             <div>
-              <p className="eyebrow">Report tools</p>
-              <h3>Use specialized tools on demand</h3>
+              <p className="eyebrow">Focused analysis</p>
+              <h3>Steer only when useful</h3>
               <p>
-                Open <strong>Specialized tools</strong> in the composer to select
-                one enabled report analyzer. Disabled tools and prerequisite
-                reasons stay available in the help catalog and picker details.
+                Use <strong>Focus</strong> in the composer to choose one
+                matching analyzer for files already added to chat. Unmatched
+                analyzers stay out of the composer.
               </p>
             </div>
           </section>
 
           {jdMcp ? (
-            <section className="help-section help-jd-mcp-section" aria-label="Specialized tools">
+            <section className="help-section help-jd-mcp-section" aria-label="Focused analyzers">
               <div className="help-section-title">
-                <Wrench size={17} aria-hidden="true" />
-                <h3>Specialized tools</h3>
+                <SlidersHorizontal size={17} aria-hidden="true" />
+                <h3>Focused analyzers</h3>
               </div>
               <div className="help-jd-mcp-status">
                 <strong>{friendlyJdMcpStatus(jdMcp)}</strong>
                 <span>
-                  {formatSpecializedToolText(jdMcp.note) || 'No specialized tools status note is available.'}
+                  {formatSpecializedToolText(jdMcp.note) || 'No focused analyzer status note is available.'}
                 </span>
               </div>
               {jdMcpDescriptors.length ? (
@@ -121,13 +121,13 @@ export function HelpDrawer({ open, commands, jdMcp, onClose }: HelpDrawerProps) 
                         </div>
                         <span>{unavailable ? 'Unavailable' : 'Available'}</span>
                         {tool.requiresApproval ? <em>requires approval</em> : null}
-                        {tool.producesReports ? <em>HTML report</em> : null}
+                        {tool.producesReports ? <em>artifact</em> : null}
                       </article>
                     );
                   })}
                 </div>
               ) : (
-                <p className="muted-help-copy">No specialized tool descriptors are loaded.</p>
+                <p className="muted-help-copy">No focused analyzer catalog is loaded.</p>
               )}
             </section>
           ) : null}
